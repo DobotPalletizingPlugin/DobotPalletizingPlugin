@@ -914,20 +914,103 @@ local function InitSucker()
     end
     LogInfo("Initialized sucker success!")
 end
+
+---------------------------------------------------------------
+--计算偏心工具
+--适配 2.4.1：用于双取单放 / 多取单放时，根据剩余箱子数量更新负载重心
+local function CalcEccTool(PalletNumber, Sucker, BoxNum)
+    local CTool = {}
+    local PlaceNum = math.abs(PalletSuckerFunction)
+
+    -- 当前吸取数量等于吸盘总数量时，使用普通工具中心
+    if (PlaceNum == BoxNum) then
+        CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+    else
+        local Ecc = {}
+        local EccTool = {}
+        local EccData = {}
+
+        Ecc, EccTool, EccData = GetPalletTool(PalletName, ToolType.Ecc)
+
+        -- 防止项目里没有配置偏心工具导致 nil 报错
+        if (EccTool == nil or EccTool[1] == nil or EccTool[2] == nil) then
+            LogWarn("Ecc tool data is missing, use default tool instead!")
+            return CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+        end
+
+        local EccLength = 0
+
+        if (Sucker ~= -1) then
+            EccLength = (PlaceNum - 1) * EccTool[2][1]
+        else
+            -- 双取单放 / 多取单放使用 EccTool[3]
+            if (EccTool[3] == nil) then
+                LogWarn("EccTool[3] is missing, use default tool instead!")
+                return CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+            end
+            EccLength = (PlaceNum - 1) * EccTool[3][1]
+        end
+
+        local SwitchSucker =
+        {
+            [SuckerCfg.Type.Double] = function()
+                EccTool[2][1] = EccTool[1][1] + EccLength * math.cos(EccTool[1][6] / 180 * math.pi)
+                EccTool[2][2] = EccTool[1][2] + EccLength * math.sin(EccTool[1][6] / 180 * math.pi)
+                CTool = DeepCopy(EccTool[2])
+            end,
+
+            [SuckerCfg.Type.Triple] = function()
+                -- 2.4.1 先保持保守处理，三吸仍使用默认工具
+                CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+            end,
+
+            [SuckerCfg.Type.Quadruple] = function()
+                -- 2.4.1 先保持保守处理，四吸仍使用默认工具
+                CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+            end
+        }
+
+        local switch_mode = SwitchSucker[PlaceNum]
+        if switch_mode then
+            switch_mode()
+        else
+            LogWarn("Sucker type is not supported by CalcEccTool, use default tool instead!")
+            CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+        end
+    end
+
+    LogInfoTable("CTool:", CTool)
+    return CTool
+end
+
+
 ---------------------------------------------------------------
 --打开吸盘
+--2.4.1 适配版本：
+--只在码垛 + 双取单放 / 多取单放时使用 CalcEccTool 更新吸取后的负载重心；
+--其他模式保持 2.4.1 原来的默认工具中心逻辑。
 local function OpenSucker(PalletNumber, CPoint, CIndex)
     local BoxNum = 0
-    local CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+    local CTool = {}
+
     local SwitchOpenSucker =
     {
         [MotionType.Norm] = function()
+            ---------------------------------------------------
+            -- 普通箱子动作
+            ---------------------------------------------------
             if (CPoint.Paras.Sucker == -1) then
+                ------------------------------------------------
+                -- 双取单放 / 多取单放
+                ------------------------------------------------
                 if (PalletNumber.Mode == WorkType.Pallet) then
+                    -- 码垛：一次吸取所有吸盘上的箱子
                     BoxNum = math.abs(PalletSuckerFunction)
                     SuckerControll(SuckerCfg.Port, ON, BoxNum)
                 else
+                    -- 拆垛：保持 2.4.1 原逻辑，按 CIndex 打开对应吸盘
                     BoxNum = CIndex
+
                     if (CIndex == 1) then
                         IORes(SuckerCfg.Port.Mode, SuckerCfg.Port.A, ON)
                     elseif (CIndex == 2) then
@@ -938,18 +1021,47 @@ local function OpenSucker(PalletNumber, CPoint, CIndex)
                         IORes(SuckerCfg.Port.Mode, SuckerCfg.Port.D, ON)
                     end
                 end
+
             elseif (PalletSuckerFunction == SuckerCfg.Type.SSingle and CPoint.Paras.Sucker == 0) then
+                ------------------------------------------------
+                -- 单吸盘 TCP 控制
+                ------------------------------------------------
                 BoxNum = 1
                 TCPWrite(Communication.Sucker.Tcp.Socket, Communication.Sucker.Command.VacuumOn)
+
             else
+                ------------------------------------------------
+                -- 普通多吸多放：一次吸多个，一次放多个
+                ------------------------------------------------
                 BoxNum = math.ceil(0.5 * CPoint.Paras.Sucker) + 1
                 SuckerControll(SuckerCfg.Port, ON, BoxNum)
             end
+
             Wait(Time.Pick.In)
-            SetPayload(BoxNum * PalletNumber.BoxProperty.BoxWeight + ToolWeight,
-                { CTool[1], CTool[2], 0.5 * (CTool[3] + PalletNumber.BoxProperty.BoxHigh) }) --设置负载指令，加上箱子重量
+
+            ---------------------------------------------------
+            -- Payload 设置
+            ---------------------------------------------------
+            if (CPoint.Paras.Sucker == -1 and PalletNumber.Mode == WorkType.Pallet) then
+                -- 码垛双取单放 / 多取单放：
+                -- 吸取后设置完整负载，例如双吸时为 2 * BoxWeight + ToolWeight
+                -- 此处使用 CalcEccTool 计算吸取状态下的工具重心
+                CTool = CalcEccTool(PalletNumber, CPoint.Paras.Sucker, BoxNum)
+            else
+                -- 其他情况保持 2.4.1 默认工具中心
+                CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+            end
+
+            SetPayload(
+                BoxNum * PalletNumber.BoxProperty.BoxWeight + ToolWeight,
+                { CTool[1], CTool[2], 0.5 * (CTool[3] + PalletNumber.BoxProperty.BoxHigh) }
+            )
         end,
+
         [MotionType.Part] = function()
+            ---------------------------------------------------
+            -- 隔板动作：保持 2.4.1 原逻辑，不引入偏心工具
+            ---------------------------------------------------
             if (PartCfg.Enable == true) then
                 IORes(PartCfg.Port.Mode, PartCfg.Port.A, ON)
             elseif (PalletSuckerFunction == SuckerCfg.Type.SSingle) then
@@ -957,9 +1069,15 @@ local function OpenSucker(PalletNumber, CPoint, CIndex)
             else
                 SuckerControll(SuckerCfg.Port, ON, math.abs(PalletSuckerFunction))
             end
+
             Wait(Time.Pick.In)
-            SetPayload(PalletNumber.ProcessNum.PartitionWeight + ToolWeight,
-                { CTool[1], CTool[2], 0.5 * CTool[3] }) --设置负载指令，加上箱子重量
+
+            CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+
+            SetPayload(
+                PalletNumber.ProcessNum.PartitionWeight + ToolWeight,
+                { CTool[1], CTool[2], 0.5 * CTool[3] }
+            )
         end
     }
 
@@ -971,16 +1089,78 @@ local function OpenSucker(PalletNumber, CPoint, CIndex)
         Alarm("OpenSucker is error, please check it!", ErrorMessage.Type.WorkingDataErr)
     end
 end
+
+
 ---------------------------------------------------------------
 --关闭吸盘
+--2.4.1 适配版本：
+--重点处理码垛双取单放 / 多取单放时，每放下一个箱子后，
+--机器人上剩余箱子数量变化导致的 Payload 重量和重心变化。
 local function CloseSucker(PalletNumber, CPoint, CIndex)
-    local CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
-    SetPayload(ToolWeight, { CTool[1], CTool[2], 0.5 * CTool[3] }) ---设置负载为吸取箱子的负载
+    local CTool = {}
+    local Weight = ToolWeight
+
+    -----------------------------------------------------------
+    -- Payload 更新逻辑
+    -----------------------------------------------------------
+    if (CPoint.Paras.Mode == MotionType.Norm
+        and CPoint.Paras.Sucker == -1
+        and CIndex ~= nil
+        and PalletNumber.Mode == WorkType.Pallet) then
+
+        -------------------------------------------------------
+        -- 码垛 + 双取单放 / 多取单放
+        --
+        -- 例：双取单放时：
+        -- CIndex = 1：放完第一个，机器人上还剩一个箱子
+        -- CIndex = 2：放完第二个，机器人上没有箱子
+        -------------------------------------------------------
+
+        if (CIndex == PalletSuckerFunction) then
+            ---------------------------------------------------
+            -- 最后一个箱子也放完了：
+            -- 恢复为空夹具工具中心
+            ---------------------------------------------------
+            CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+        else
+            ---------------------------------------------------
+            -- 还剩箱子在吸盘上：
+            -- 使用偏心工具计算剩余箱子的重心
+            ---------------------------------------------------
+            CTool = CalcEccTool(PalletNumber, CPoint.Paras.Sucker, CIndex)
+        end
+
+        -------------------------------------------------------
+        -- 剩余负载重量：
+        -- PalletSuckerFunction = 总吸盘/总箱子数量
+        -- CIndex = 当前已经放掉第几个箱子
+        -------------------------------------------------------
+        Weight = (PalletSuckerFunction - CIndex) * PalletNumber.BoxProperty.BoxWeight + ToolWeight
+
+    else
+        -------------------------------------------------------
+        -- 非码垛双取单放场景：
+        -- 保持 2.4.1 原逻辑，关闭吸盘后恢复为空夹具负载
+        -------------------------------------------------------
+        CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+        Weight = ToolWeight
+    end
+
+    SetPayload(Weight, { CTool[1], CTool[2], 0.5 * CTool[3] })
+    LogInfo("BoxWeight: %s", Weight)
+
     local SwitchCloseSucker =
     {
         [MotionType.Norm] = function()
+            ---------------------------------------------------
+            -- 普通箱子动作
+            ---------------------------------------------------
             if (CPoint.Paras.Sucker == -1) then
+                ------------------------------------------------
+                -- 双取单放 / 多取单放
+                ------------------------------------------------
                 if (PalletNumber.Mode == WorkType.Pallet) then
+                    -- 码垛：按当前 CIndex 关闭对应吸盘
                     if (CIndex == 1) then
                         IORes(SuckerCfg.Port.Mode, SuckerCfg.Port.A, OFF)
                     elseif (CIndex == 2) then
@@ -990,6 +1170,8 @@ local function CloseSucker(PalletNumber, CPoint, CIndex)
                     elseif (CIndex == 4) then
                         IORes(SuckerCfg.Port.Mode, SuckerCfg.Port.D, OFF)
                     end
+
+                    -- 破真空逻辑：保持 2.4.1 原逻辑
                     if (SuckerCfg.Dete.VacuumBreak.Enable == 1) then
                         if (CIndex == 1) then
                             IORes(SuckerCfg.Dete.VacuumBreak.Mode, SuckerCfg.Dete.VacuumBreak.A, ON)
@@ -1000,7 +1182,9 @@ local function CloseSucker(PalletNumber, CPoint, CIndex)
                         elseif (CIndex == 4) then
                             IORes(SuckerCfg.Dete.VacuumBreak.Mode, SuckerCfg.Dete.VacuumBreak.D, ON)
                         end
+
                         Wait(Time.Place.In)
+
                         if (CIndex == 1) then
                             IORes(SuckerCfg.Dete.VacuumBreak.Mode, SuckerCfg.Dete.VacuumBreak.A, OFF)
                         elseif (CIndex == 2) then
@@ -1010,10 +1194,13 @@ local function CloseSucker(PalletNumber, CPoint, CIndex)
                         elseif (CIndex == 4) then
                             IORes(SuckerCfg.Dete.VacuumBreak.Mode, SuckerCfg.Dete.VacuumBreak.D, OFF)
                         end
+
                         return
                     end
                 else
+                    -- 拆垛：保持 2.4.1 原逻辑，关闭所有吸盘
                     SuckerControll(SuckerCfg.Port, OFF, math.abs(PalletSuckerFunction))
+
                     if (SuckerCfg.Dete.VacuumBreak.Enable == 1) then
                         SuckerControll(SuckerCfg.Dete.VacuumBreak, ON, math.abs(PalletSuckerFunction))
                         Wait(Time.Place.In)
@@ -1021,10 +1208,19 @@ local function CloseSucker(PalletNumber, CPoint, CIndex)
                         return
                     end
                 end
+
             elseif (PalletSuckerFunction == SuckerCfg.Type.SSingle and CPoint.Paras.Sucker == 0) then
+                ------------------------------------------------
+                -- 单吸盘 TCP 控制
+                ------------------------------------------------
                 TCPWrite(Communication.Sucker.Tcp.Socket, Communication.Sucker.Command.VacuumOff)
+
             else
+                ------------------------------------------------
+                -- 普通多吸多放
+                ------------------------------------------------
                 SuckerControll(SuckerCfg.Port, OFF, math.ceil(0.5 * CPoint.Paras.Sucker) + 1)
+
                 if (SuckerCfg.Dete.VacuumBreak.Enable == 1) then
                     SuckerControll(SuckerCfg.Dete.VacuumBreak, ON, math.ceil(0.5 * CPoint.Paras.Sucker) + 1)
                     Wait(Time.Place.In)
@@ -1032,15 +1228,21 @@ local function CloseSucker(PalletNumber, CPoint, CIndex)
                     return
                 end
             end
+
             Wait(Time.Place.In)
         end,
+
         [MotionType.Part] = function()
+            ---------------------------------------------------
+            -- 隔板动作：保持 2.4.1 原逻辑
+            ---------------------------------------------------
             if (PartCfg.Enable == true) then
                 IORes(PartCfg.Port.Mode, PartCfg.Port.A, OFF)
             elseif (PalletSuckerFunction == SuckerCfg.Type.SSingle) then
                 TCPWrite(Communication.Sucker.Tcp.Socket, Communication.Sucker.Command.VacuumOff)
             else
                 SuckerControll(SuckerCfg.Port, OFF, math.abs(PalletSuckerFunction))
+
                 if (SuckerCfg.Dete.VacuumBreak.Enable == 1) then
                     SuckerControll(SuckerCfg.Dete.VacuumBreak, ON, math.abs(PalletSuckerFunction))
                     Wait(Time.Place.In)
@@ -1048,6 +1250,7 @@ local function CloseSucker(PalletNumber, CPoint, CIndex)
                     return
                 end
             end
+
             Wait(Time.Place.In)
         end
     }
@@ -1060,6 +1263,7 @@ local function CloseSucker(PalletNumber, CPoint, CIndex)
         Alarm("CloseSucker is error, please check it!", ErrorMessage.Type.WorkingDataErr)
     end
 end
+
 ---------------------------------------------------------------
 --初始化三色灯状态
 local function InitLight()
