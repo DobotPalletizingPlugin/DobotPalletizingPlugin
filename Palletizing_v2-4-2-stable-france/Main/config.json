@@ -1,6 +1,6 @@
 {
   "name": "Palletizing",
-  "description": "%{tr_dobot_description_palletizing}",
+  "description": "06 May - MovL backward",
   "version": "2-4-2-stable-france",
   "scriptVersion": "2-4-2-stable-0330",
   "hotkey": true,

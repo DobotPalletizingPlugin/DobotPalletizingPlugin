@@ -122,7 +122,7 @@ local function GetDeteMode(PalletNumber, State)
         return
     end
 
-    local DelayTime = 500
+    local DelayTime = 3000
     if Sucker == 0 then
         if (DI(PalletNumber.BoxBeInpPlaceDI1) == State) then
             Wait(DelayTime)
