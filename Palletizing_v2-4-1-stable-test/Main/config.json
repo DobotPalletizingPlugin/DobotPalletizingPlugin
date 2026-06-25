@@ -1,0 +1,15 @@
+{
+  "name": "Palletizing",
+  "description": "%{tr_dobot_description_palletizing}",
+  "version": "2-4-1-stable-test",
+  "scriptVersion": "2-4-0-stable-0928",
+  "hotkey": true,
+  "applicationDisplayed": {
+    "applicationTitle": "Palletizing",
+    "applicationImage": "pallet.svg"
+  },
+  "mqtt": {
+    "clientId": "Palletizing",
+    "subscribe": []
+  }
+}
