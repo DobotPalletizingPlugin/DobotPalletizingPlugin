@@ -1143,7 +1143,7 @@ local function TransMotion(CPoint, CDir, Acc, Vel)
             if (PalletObstacleFunc == 1) then
                 MovL(CPoint.MotionPoint[i], { a = Acc, v = Vel, cp = 100 }) --运动到层过渡点
             else
-                MovJ(CPoint.MotionPoint[i], { a = Acc, v = Vel, cp = 100 }) --运动到层过渡点
+                MovL(CPoint.MotionPoint[i], { a = Acc, v = Vel, cp = 100 }) --运动到层过渡点
             end
         end
     end
@@ -1276,10 +1276,10 @@ local function PTPMotion(PalletNumber, CPoint)
         TransMotion(CPoint, Dir.Forward, LDAcc, LDVel)
         for i = 1, CPoint.Paras.Times do
             if CPoint.Paras.OffSet[i] == 1 then
-                MovJ(CPoint.MotionPoint[15 + i], { a = LDAcc, v = LDVel, cp = 100 })         --运动到放置过渡点
+                MovL(CPoint.MotionPoint[15 + i], { a = LDAcc, v = LDVel, cp = 100 })         --运动到放置过渡点
                 MovL(CPoint.MotionPoint[11 + i], { a = PlaceAcc, v = PlaceSpeed, cp = 100 }) --运动到放置点正上方
             else
-                MovJ(CPoint.MotionPoint[11 + i], { a = LDAcc, v = LDVel, cp = 100 })         --运动到放置点正上方
+                MovL(CPoint.MotionPoint[11 + i], { a = LDAcc, v = LDVel, cp = 100 })         --运动到放置点正上方
             end
             MovL(CPoint.MotionPoint[7 + i], { a = PlaceAcc, v = PlaceSpeed, cp = 100 })
             UpdateData(PalletNumber, CPoint)
@@ -1293,7 +1293,7 @@ local function PTPMotion(PalletNumber, CPoint)
                     MovL(CPoint.MotionPoint[15 + i], { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到放置过渡点
                 end
             else
-                MovJ(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到放置点正上方
+                MovL(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到放置点正上方
             end
         end
         TransMotion(CPoint, Dir.Backward, NLDAcc, NLDVel)
@@ -1315,9 +1315,9 @@ local function PTPMotion(PalletNumber, CPoint)
         TransMotion(CPoint, Dir.Forward, NLDAcc, NLDVel)
         for i = CPoint.Paras.Times, 1, -1 do
             if (CPoint.Paras.OffSet[i] == 1) then
-                MovJ(CPoint.MotionPoint[15 + i], { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到放置过渡点
+                MovL(CPoint.MotionPoint[15 + i], { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到放置过渡点
             end
-            MovJ(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 })     --运动到放置点正上方
+            MovL(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 })     --运动到放置点正上方
             MovL(CPoint.MotionPoint[7 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
             OpenSucker(PalletNumber, CPoint, i)
             if SimulateMode == 1 then

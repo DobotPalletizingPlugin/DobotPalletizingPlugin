@@ -1828,17 +1828,23 @@ function DropSignalDete(PalletNumber, DeteState, SuckerPort, Mode)
     else
         if (PartCfg.Enable == true) then
             if (DeteState == ON) and (CheckIORes(PartCfg.Port.Mode, PartCfg.Port.A) == ON) then
+                Wait(Time.DropDetection)
+                if (DeteState == ON) and (CheckIORes(PartCfg.Port.Mode, PartCfg.Port.A) == ON) then
+                    TriLightStatus(PalletNumber, Light.Red.On)
+                    PalletNumber.StateValue.Status = StateType.DropBox
+                    CommitPalletStatus(PalletNumber)
+                    Alarm("TCP With Box!", ErrorMessage.Type.StartErr)
+                end
+            end
+        end
+        if (DeteState == ON) and (CheckIORes(SuckerCfg.Port.Mode, SuckerPort) == ON) then
+            Wait(Time.DropDetection)
+            if (DeteState == ON) and (CheckIORes(SuckerCfg.Port.Mode, SuckerPort) == ON) then
                 TriLightStatus(PalletNumber, Light.Red.On)
                 PalletNumber.StateValue.Status = StateType.DropBox
                 CommitPalletStatus(PalletNumber)
                 Alarm("TCP With Box!", ErrorMessage.Type.StartErr)
             end
-        end
-        if (DeteState == ON) and (CheckIORes(SuckerCfg.Port.Mode, SuckerPort) == ON) then
-            TriLightStatus(PalletNumber, Light.Red.On)
-            PalletNumber.StateValue.Status = StateType.DropBox
-            CommitPalletStatus(PalletNumber)
-            Alarm("TCP With Box!", ErrorMessage.Type.StartErr)
         end
     end
 end
