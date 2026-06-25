@@ -333,13 +333,7 @@ local function GetTransPoint(PalletNumber)
     local THeight = Point.Pose[8][3] + PalletNumber.OffsetHeight + OffSet[1][3]
 
     for i = 1, Res.TransNum do
-        if (Res.Mode == MotionType.Part) then
-            if (i > Res.TransNum - 2) then
-                CopyPoint.pose[i][6] = Point.Pose[8][6]
-            end
-        else
-            CopyPoint.pose[i][6] = Point.Pose[8][6] --过渡点与放置姿态一致
-        end
+        CopyPoint.pose[i][6] = Point.Pose[8][6] --过渡点与放置姿态一致
 
         if CopyPoint.mode[i] == 0 then
             if CopyPoint.pose[i][3] <= THeight then
@@ -413,26 +407,18 @@ local function GetResult(CData)
     CJoint, Res.LH, Res.ErrIndex = GetInvK(PalletName, CData.Pallet, Point.Pose, ToolNum)
     for i = 1, 19 do
         Ret.MotionPoint[i] = { joint = CJoint[i] }
-        -- if (Res.Mode == MotionType.Part) then
-        --     -- 隔板：只有最后2个过渡点使用放置A点对应的joint6
-        --     if ((i > Res.TransNum - 2 and i <= Res.TransNum) or i == 12 or i == 16) then
-        --         Ret.MotionPoint[i].joint[6] = CJoint[8][6]
-        --     end
-        -- else
-        --     -- 普通箱子：保持原先逻辑，1~5过渡点都使用放置A点对应的joint6
-        --     if (i < 6 or i == 12 or i == 16) then
-        --         Ret.MotionPoint[i].joint[6] = CJoint[8][6]
-        --     end
-        -- end
-        -- if (i == 13 or i == 17) then
-        --     Ret.MotionPoint[i].joint[6] = CJoint[9][6]
-        -- end
-        -- if (i == 14 or i == 18) then
-        --     Ret.MotionPoint[i].joint[6] = CJoint[10][6]
-        -- end
-        -- if (i == 15 or i == 19) then
-        --     Ret.MotionPoint[i].joint[6] = CJoint[11][6]
-        -- end
+        if (i < 6 or i == 12 or i == 16) then
+            Ret.MotionPoint[i].joint[6] = CJoint[8][6]
+        end
+        if (i == 13 or i == 17) then
+            Ret.MotionPoint[i].joint[6] = CJoint[9][6]
+        end
+        if (i == 14 or i == 18) then
+            Ret.MotionPoint[i].joint[6] = CJoint[10][6]
+        end
+        if (i == 15 or i == 19) then
+            Ret.MotionPoint[i].joint[6] = CJoint[11][6]
+        end
     end
     Ret.Paras = DeepCopy(Res)
     return Ret
