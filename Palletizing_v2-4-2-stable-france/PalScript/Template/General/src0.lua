@@ -1424,11 +1424,7 @@ local function StandyMotion(PalletNumber, CPoint)
         MovL(Standy, { a = NLDAcc, v = NLDVel, cp = 100 })
     else
         local CurrentJoint = GetAngle().joint
-        if (CurrentJoint[6] > 180 or CurrentJoint[6] < -180) then
-            MovJ(CPoint.MotionPoint[7], { a = NLDAcc, v = NLDVel, cp = 100 })
-        else
-            MovL(CPoint.MotionPoint[7], { a = NLDAcc, v = NLDVel, cp = 100 })
-        end
+        MovJ(CPoint.MotionPoint[7], { a = NLDAcc, v = NLDVel, cp = 100 })
     end
 end
 ---------------------------------------------------------------
@@ -1493,110 +1489,308 @@ end
 --12~15：放料上方点（自动生成），16~19：放料偏移点（自动生成）
 ---------------------------------------------------------------
 --执行点位运动
+
 local function PTPMotion(PalletNumber, CPoint)
     local CPose = { pose = {} }
-    -- 仅用于隔板功能的慢抬升参数
+
+    ----------------------------------------------------------------
+    -- 隔板取料慢速抬升参数
+    ----------------------------------------------------------------
+    -- PartSlowLiftHeight:
+    --   隔板吸取后先慢速垂直抬升的高度，单位 mm。
+    --   目的：避免刚吸起隔板时，把相邻隔板一起带起来。
     local PartSlowLiftHeight = 20
     local PartSlowLiftAcc = 5
     local PartSlowLiftVel = 5
 
+    ----------------------------------------------------------------
+    -- 双吸单放 / 多吸单放：放完一个箱子后的额外抬升高度
+    ----------------------------------------------------------------
+    -- DepositLiftHeight:
+    --   当 i < CPoint.Paras.Times 时，说明当前箱子不是最后一个箱子，
+    --   机器人上还带着后续箱子。
+    --
+    --   放完当前箱子后，先回到当前放置上方点，
+    --   再从当前位置沿当前用户坐标系 Z 方向额外抬高 250 mm。
+    --
+    --   目的：
+    --     避免机器人横向移动到下一个箱子放置点时，
+    --     夹具或剩余箱子刮碰已经放好的箱子。
+    local DepositLiftHeight = 250
+
     if (PalletNumber.Mode == WorkType.Pallet) then
+        ----------------------------------------------------------------
+        -- WorkType.Pallet:
+        --   当前流程是码垛流程：
+        --   从输送线 / 取料点抓箱子，然后放到托盘上。
+        ----------------------------------------------------------------
+
         Wait(Time.Pick.Pre)
+
         if (CPoint.Paras.Mode == MotionType.Part) then
+            ----------------------------------------------------------------
+            -- MotionType.Part:
+            --   当前 CPoint 是隔板动作，不是普通箱子动作。
+            --
+            -- 点位说明：
+            --   MotionPoint[7]：隔板取料上方点 / standby 上方点
+            --   CPartPick：实际隔板取料点，根据剩余隔板数量动态计算高度
+            --
+            -- 速度说明：
+            --   到隔板取料上方点：NLDAcc / SyncMotionVel
+            --     因为此时未吸隔板，属于空载或同步升降运动。
+            --
+            --   下去取隔板：NLDAcc / NLDVel
+            --     因为还未吸到隔板，仍然为空载。
+            --
+            --   吸到隔板后慢速抬升：PartSlowLiftAcc / PartSlowLiftVel
+            --     目的是避免带起相邻隔板。
+            --
+            --   吸到隔板后回上方点：LDAcc / LDVel
+            --     因为此时已经带着隔板，按带料速度运行。
+            ----------------------------------------------------------------
+
             local CPartPick = DeepCopy(PartPick)
             CPartPick.pose[3] = CPartPick.pose[3] - CPoint.Paras.LH +
                 PalletNumber.ProcessNum.PartitionHeight * PalletNumber.Partition.RePartNum
+
             MovJ(CPoint.MotionPoint[7], { a = NLDAcc, v = SyncMotionVel, cp = 100 })
             SyncMotion(CPoint.Paras.LH)
-            MovL(CPartPick, { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到抓取点
+
+            MovL(CPartPick, { a = NLDAcc, v = NLDVel, cp = 100 })
             OpenSucker(PalletNumber, CPoint)
+
             if SimulateMode == 1 then
                 UpdatePickBoxState(PalletNumber, CPoint)
             end
 
-            -- 取到隔板后：先慢速抬升 12 mm，再恢复原来的速度回上方点
             local CPartPickLift = DeepCopy(CPartPick)
             CPartPickLift.pose[3] = CPartPickLift.pose[3] + PartSlowLiftHeight
             MovL(CPartPickLift, { a = PartSlowLiftAcc, v = PartSlowLiftVel, cp = 0 })
 
-            
-            RelMovJUser({0, 0, PartSlowLiftHeight, 0, 0, 0}, {user =  PalletNumber.Coordinate.PartitionUserNum, tool = PalletNumber.Coordinate.ToolNum , a = PartSlowLiftAcc, v = PartSlowLiftVel})
-
-
-
-            -- local currentJoint = { joint = GetAngle().joint }
-
-            -- local liftPoint = PositiveKin(currentJoint,
-            --     { user = PalletNumber.Coordinate.PartitionUserNum, tool = PalletNumber.Coordinate.ToolNum })
-        
-            -- liftPoint.pose[3] = liftPoint.pose[3] + PartSlowLiftHeight
-        
-            -- local errId, liftJointPoint = InverseKin(liftPoint,
-            --     { user = PalletNumber.Coordinate.PartitionUserNum, tool = PalletNumber.Coordinate.ToolNum })
-        
-            -- if (errId ~= 0) or (liftJointPoint == nil) then
-            --     Alarm("InverseKin for partition lift failed!", ErrorMessage.Type.PointErr)
-            -- end
-        
-            -- MovL(liftJointPoint, { a = PartSlowLiftAcc, v = PartSlowLiftVel, cp = 0 })
-            -- MovL(CPoint.MotionPoint[7], { a = LDAcc, v = LDVel, cp = 100 }) --运动到抓取点上方
+            MovL(CPoint.MotionPoint[7], { a = LDAcc, v = LDVel, cp = 100 })
 
         else
+            ----------------------------------------------------------------
+            -- MotionType.Norm:
+            --   当前 CPoint 是普通箱子动作。
+            --
+            -- 点位说明：
+            --   MotionPoint[6]：箱子取料点
+            --   MotionPoint[7]：箱子取料上方点
+            --
+            -- if 条件说明：
+            --   SingleMotion == false:
+            --     当前循环第一次进入取料侧，需要先移动到取料上方点。
+            --
+            --   SyncSignal == true:
+            --     升降柱高度发生变化，需要同步等待升降柱动作。
+            --
+            --   StateMachine == FSMType.DLR and PalletNumber.Pallet ~= PrePallet:
+            --     双输送线双托盘模式下，当前托盘和上一次托盘不同，
+            --     说明左右托盘切换了，需要重新移动到当前托盘对应的取料上方点。
+            --
+            -- 速度说明：
+            --   到取料上方点：NLDAcc / SyncMotionVel
+            --     因为此时还没有抓箱子，同时可能要配合升降柱。
+            --
+            --   下去取箱子：NLDAcc / NLDVel
+            --     因为下去之前还是空载。
+            --
+            --   抓箱后回取料上方点：LDAcc / LDVel
+            --     因为此时已经带着箱子。
+            ----------------------------------------------------------------
+
             if ((SingleMotion == false) or (SyncSignal == true)
                     or (StateMachine == FSMType.DLR and PalletNumber.Pallet ~= PrePallet)) then
                 SingleMotion = true
                 MovJ(CPoint.MotionPoint[7], { a = NLDAcc, v = SyncMotionVel, cp = 100 })
                 SyncMotion(CPoint.Paras.LH)
             end
-            MovL(CPoint.MotionPoint[6], { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到抓取点
+
+            MovL(CPoint.MotionPoint[6], { a = NLDAcc, v = NLDVel, cp = 100 })
             OpenSucker(PalletNumber, CPoint)
+
             if SimulateMode == 1 then
                 UpdatePickBoxState(PalletNumber, CPoint)
             end
-            MovL(CPoint.MotionPoint[7], { a = LDAcc, v = LDVel, cp = 100 }) --运动到抓取点上方
+
+            MovL(CPoint.MotionPoint[7], { a = LDAcc, v = LDVel, cp = 100 })
         end
+
         Wait(Time.Pick.Post)
+
+        ----------------------------------------------------------------
+        -- TransMotion Forward:
+        --   从取料侧移动到放料侧的过渡点运动。
+        --
+        -- 点位说明：
+        --   MotionPoint[1] ~ MotionPoint[5]：
+        --     用户示教的过渡点。
+        --
+        -- 方向说明：
+        --   Dir.Forward:
+        --     从取料侧到放料侧，按照 1 -> 5 顺序走过渡点。
+        --
+        -- 速度说明：
+        --   此时机器人已经抓到箱子 / 隔板，
+        --   所以使用 LDAcc / LDVel。
+        ----------------------------------------------------------------
         TransMotion(CPoint, Dir.Forward, LDAcc, LDVel)
+
         for i = 1, CPoint.Paras.Times do
+            ----------------------------------------------------------------
+            -- CPoint.Paras.Times:
+            --   本次动作需要放置的次数。
+            --
+            -- 例如：
+            --   单吸单放：Times = 1
+            --   双吸单放：Times = 2
+            --   三吸单放：Times = 3
+            --
+            -- i:
+            --   当前正在放第几个箱子。
+            ----------------------------------------------------------------
+
             if CPoint.Paras.OffSet[i] == 1 then
-                MovL(CPoint.MotionPoint[15 + i], { a = LDAcc, v = LDVel, cp = 100 })         --运动到放置过渡点
-                MovL(CPoint.MotionPoint[11 + i], { a = PlaceAcc, v = PlaceSpeed, cp = 100 }) --运动到放置点正上方
+                ----------------------------------------------------------------
+                -- OffSet[i] == 1:
+                --   当前第 i 个箱子需要使用放置 offset 过渡点。
+                --
+                -- 点位说明：
+                --   MotionPoint[15 + i]：
+                --     第 i 个箱子的放置 offset 过渡点。
+                --     例如：
+                --       i = 1 -> MotionPoint[16]
+                --       i = 2 -> MotionPoint[17]
+                --       i = 3 -> MotionPoint[18]
+                --       i = 4 -> MotionPoint[19]
+                --
+                --   MotionPoint[11 + i]：
+                --     第 i 个箱子的放置上方点。
+                --     例如：
+                --       i = 1 -> MotionPoint[12]
+                --       i = 2 -> MotionPoint[13]
+                --       i = 3 -> MotionPoint[14]
+                --       i = 4 -> MotionPoint[15]
+                --
+                -- 速度说明：
+                --   到 offset 过渡点：LDAcc / LDVel
+                --     因为此时机器人还带着箱子。
+                --
+                --   从 offset 过渡点到放置上方点：PlaceAcc / PlaceSpeed
+                --     因为已经接近码垛放置区域，需要使用放置速度。
+                ----------------------------------------------------------------
+
+                MovL(CPoint.MotionPoint[15 + i], { a = LDAcc, v = LDVel, cp = 100 })
+                MovL(CPoint.MotionPoint[11 + i], { a = PlaceAcc, v = PlaceSpeed, cp = 100 })
+
             else
-                MovL(CPoint.MotionPoint[11 + i], { a = LDAcc, v = LDVel, cp = 100 })         --运动到放置点正上方
+                ----------------------------------------------------------------
+                -- OffSet[i] ~= 1:
+                --   当前第 i 个箱子不需要 offset 过渡点，
+                --   直接移动到第 i 个箱子的放置上方点。
+                --
+                -- 点位说明：
+                --   MotionPoint[11 + i]：
+                --     第 i 个箱子的放置上方点。
+                --
+                -- 速度说明：
+                --   此时机器人仍然带着箱子，
+                --   所以使用 LDAcc / LDVel。
+                ----------------------------------------------------------------
+
+                MovL(CPoint.MotionPoint[11 + i], { a = LDAcc, v = LDVel, cp = 100 })
             end
+
+            ----------------------------------------------------------------
+            -- 下放到实际放置点
+            --
+            -- 点位说明：
+            --   MotionPoint[7 + i]：
+            --     第 i 个箱子的实际放置点。
+            --     例如：
+            --       i = 1 -> MotionPoint[8]
+            --       i = 2 -> MotionPoint[9]
+            --       i = 3 -> MotionPoint[10]
+            --       i = 4 -> MotionPoint[11]
+            --
+            -- 速度说明：
+            --   放置动作使用 PlaceAcc / PlaceSpeed。
+            ----------------------------------------------------------------
             MovL(CPoint.MotionPoint[7 + i], { a = PlaceAcc, v = PlaceSpeed, cp = 100 })
+
+            ----------------------------------------------------------------
+            -- 放下当前第 i 个箱子
+            --
+            -- 对于双吸单放：
+            --   i = 1 时，只关闭第一个吸盘，机器人上还带着第二个箱子。
+            --   i = 2 时，关闭第二个吸盘，机器人空载。
+            --
+            -- CloseSucker 内部会根据 i 控制对应吸盘。
+            ----------------------------------------------------------------
             CloseSucker(PalletNumber, CPoint, i)
+
             if SimulateMode == 1 then
                 UpdatePlaceBoxState(PalletNumber, CPoint)
             end
-            -- if (CPoint.Paras.Mode == MotionType.Part) then
-            --     -- 放下隔板后：基于当前位置慢速抬升 12 mm，再恢复原来的返回逻辑
-            --     local liftPoint = GetPose()
-            --     liftPoint.pose[3] = liftPoint.pose[3] + PartSlowLiftHeight
-            --     MovL(liftPoint, { a = PartSlowLiftAcc, v = PartSlowLiftVel, cp = 0 })
-            -- end
-
-            -- 以下返回逻辑保持原版风格，不改普通功能
-            -- UpdateData(PalletNumber, CPoint)
-            -- if (CPoint.Paras.Times ~= 1) then
-            --     MovL(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 })     --运动到放置点正上方
-            --     if CPoint.Paras.OffSet[i] == 1 then
-            --         MovL(CPoint.MotionPoint[15 + i], { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到放置过渡点
-            --     end
-            -- else
-            --     MovL(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到放置点正上方
-            -- end
 
             UpdateData(PalletNumber, CPoint)
 
-            MovL(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
-
-            local DepositLiftHeight = 250
-
             if i < CPoint.Paras.Times then
-                -- 还有下一个 box
-                -- 在当前 arrival point 基础上再抬高 80 mm
+                ----------------------------------------------------------------
+                -- i < CPoint.Paras.Times:
+                --   当前箱子不是最后一个箱子。
+                --
+                -- 具体含义：
+                --   机器人刚放完第 i 个箱子，
+                --   但是后面还有第 i+1 个箱子没有放。
+                --
+                -- 例如双吸单放：
+                --   Times = 2
+                --   i = 1 时满足 i < Times
+                --   说明第一个箱子已经放下，
+                --   但机器人仍然带着第二个箱子。
+                --
+                -- 速度原则：
+                --   只要机器人上还带着箱子，
+                --   后续返回、抬升、offset 运动都必须使用 LDAcc / LDVel。
+                ----------------------------------------------------------------
 
+                ----------------------------------------------------------------
+                -- 第一步：从实际放置点回到当前箱子的放置上方点
+                --
+                -- 点位说明：
+                --   MotionPoint[11 + i]：
+                --     当前第 i 个箱子的放置上方点。
+                --
+                -- 速度说明：
+                --   机器人仍然带着后续箱子，
+                --   所以使用 LDAcc / LDVel。
+                ----------------------------------------------------------------
+                MovL(CPoint.MotionPoint[11 + i], { a = LDAcc, v = LDVel, cp = 100 })
+
+                ----------------------------------------------------------------
+                -- 第二步：基于当前位置额外抬高 250 mm
+                --
+                -- 逻辑说明：
+                --   先读取当前关节角 GetAngle().joint；
+                --   再用 PositiveKin 转换成当前 TCP 位姿；
+                --   然后把 pose[3]，也就是 Z 高度，加上 DepositLiftHeight；
+                --   最后用 InverseKin 转回关节点，并用 MovL 直线运动过去。
+                --
+                -- 坐标系说明：
+                --   这里使用 PalletNumber.Coordinate.UserNum，
+                --   也就是当前托盘用户坐标系。
+                --
+                -- 目的：
+                --   放完第 i 个箱子后，机器人还带着第 i+1 个箱子。
+                --   直接横移到下一个放置点可能刮碰已经放好的箱子。
+                --   所以先抬高 250 mm，再进入后续路径。
+                --
+                -- 速度说明：
+                --   仍然带箱，所以使用 LDAcc / LDVel。
+                ----------------------------------------------------------------
                 local currentJoint = { joint = GetAngle().joint }
 
                 local liftPoint = PositiveKin(currentJoint,
@@ -1611,43 +1805,99 @@ local function PTPMotion(PalletNumber, CPoint)
                     Alarm("InverseKin for deposit lift failed!", ErrorMessage.Type.PointErr)
                 end
 
-                MovL(liftJointPoint, { a = NLDAcc, v = NLDVel, cp = 0 })
+                MovL(liftJointPoint, { a = LDAcc, v = LDVel, cp = 0 })
+
+                if CPoint.Paras.OffSet[i] == 1 then
+                    ----------------------------------------------------------------
+                    -- 如果当前第 i 个箱子使用了 offset 过渡点，
+                    -- 那么抬高后再返回当前箱子的 offset 过渡点。
+                    --
+                    -- 点位说明：
+                    --   MotionPoint[15 + i]：
+                    --     当前第 i 个箱子的放置 offset 过渡点。
+                    --
+                    -- 速度说明：
+                    --   虽然第 i 个箱子已经放下，
+                    --   但机器人还带着第 i+1 个箱子，
+                    --   所以这里仍然使用 LDAcc / LDVel。
+                    ----------------------------------------------------------------
+                    MovL(CPoint.MotionPoint[15 + i], { a = LDAcc, v = LDVel, cp = 100 })
+                end
+
+            else
+                ----------------------------------------------------------------
+                -- i >= CPoint.Paras.Times:
+                --   当前箱子是最后一个箱子。
+                --
+                -- 具体含义：
+                --   当前第 i 个箱子放完以后，
+                --   本次抓取到的所有箱子都已经放完，
+                --   机器人已经空载。
+                --
+                -- 速度原则：
+                --   机器人空载后，返回路径使用 NLDAcc / NLDVel。
+                ----------------------------------------------------------------
+
+                ----------------------------------------------------------------
+                -- 从最后一个箱子的实际放置点回到放置上方点
+                --
+                -- 点位说明：
+                --   MotionPoint[11 + i]：
+                --     最后一个箱子的放置上方点。
+                --
+                -- 速度说明：
+                --   已经空载，所以使用 NLDAcc / NLDVel。
+                ----------------------------------------------------------------
+                MovL(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
+
+                if CPoint.Paras.OffSet[i] == 1 then
+                    ----------------------------------------------------------------
+                    -- 最后一个箱子如果使用了 offset 过渡点，
+                    -- 返回 offset 过渡点时机器人已经空载。
+                    --
+                    -- 点位说明：
+                    --   MotionPoint[15 + i]：
+                    --     最后一个箱子的放置 offset 过渡点。
+                    --
+                    -- 速度说明：
+                    --   已经空载，所以使用 NLDAcc / NLDVel。
+                    ----------------------------------------------------------------
+                    MovL(CPoint.MotionPoint[15 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
+                end
             end
-
-            if CPoint.Paras.OffSet[i] == 1 then
-                MovL(CPoint.MotionPoint[15 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
-            end
-
-            -- local DepositLiftHeight = 80 -- 第一个盒子放完后额外抬升高度 mm
-
-            -- if i < CPoint.Paras.Times then
-            --     -- 不是最后一个 box，说明后面还有第 2 / 第 3 个 box
-            --     -- 放完当前 box 后，先抬高，避免移动到下一个 box 时刮到其它箱子
-
-            --     local LiftPoint = DeepCopy(CPoint.MotionPoint[11 + i])
-            --     LiftPoint.pose[3] = LiftPoint.pose[3] + DepositLiftHeight
-            --     MovL(LiftPoint, { a = NLDAcc, v = NLDVel, cp = 100 })
-
-            --     if CPoint.Paras.OffSet[i] == 1 then
-            --         local OffsetLiftPoint = DeepCopy(CPoint.MotionPoint[15 + i])
-            --         OffsetLiftPoint.pose[3] = OffsetLiftPoint.pose[3] + DepositLiftHeight
-            --         MovL(OffsetLiftPoint, { a = NLDAcc, v = NLDVel, cp = 100 })
-            --     end
-            -- else
-            --     -- 最后一个 box，保持原来的返回逻辑即可
-            --     MovL(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
-
-            --     if CPoint.Paras.OffSet[i] == 1 then
-            --         MovL(CPoint.MotionPoint[15 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
-            --     end
-            -- end
         end
+
+        ----------------------------------------------------------------
+        -- TransMotion Backward:
+        --   从放料侧返回取料侧的过渡点运动。
+        --
+        -- 点位说明：
+        --   MotionPoint[1] ~ MotionPoint[5]：
+        --     用户示教的过渡点。
+        --
+        -- 方向说明：
+        --   Dir.Backward:
+        --     从放料侧返回取料侧，按照 5 -> 1 顺序走过渡点。
+        --
+        -- 速度说明：
+        --   正常情况下箱子已经全部放完，
+        --   所以使用 NLDAcc / NLDVel。
+        ----------------------------------------------------------------
         TransMotion(CPoint, Dir.Backward, NLDAcc, NLDVel)
+
         CPose = GetPose()
         StandyMotion(PalletNumber, CPoint)
+
     else
+        ----------------------------------------------------------------
+        -- 非 WorkType.Pallet:
+        --   这里是拆垛 / 反向流程。
+        --   原逻辑基本保持不变。
+        ----------------------------------------------------------------
+
         if (SingleMotion == false) or (SyncSignal == true)
             or (StateMachine == FSMType.DLR and PalletNumber.Pallet ~= PrePallet) then
+
             if SingleMotion == false then
                 SingleMotion = true
             else
@@ -1656,49 +1906,68 @@ local function PTPMotion(PalletNumber, CPoint)
                 Standy.pose[3] = Standy.pose[3] - CPoint.Paras.LH
                 MovJ(Standy, { a = NLDAcc, v = SyncMotionVel, cp = 100 })
             end
+
             SyncMotion(CPoint.Paras.LH)
         end
+
         TransMotion(CPoint, Dir.Forward, NLDAcc, NLDVel)
+
         for i = CPoint.Paras.Times, 1, -1 do
             if (CPoint.Paras.OffSet[i] == 1) then
-                MovJ(CPoint.MotionPoint[15 + i], { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到放置过渡点
+                MovJ(CPoint.MotionPoint[15 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
             end
-            MovJ(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 })     --运动到放置点正上方
+
+            MovJ(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
             MovL(CPoint.MotionPoint[7 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
+
             OpenSucker(PalletNumber, CPoint, i)
+
             if SimulateMode == 1 then
                 UpdatePickBoxState(PalletNumber, CPoint)
             end
+
             UpdateData(PalletNumber, CPoint)
-            MovL(CPoint.MotionPoint[11 + i], { a = LDAcc, v = LDVel, cp = 100 })     --运动到放置点正上方
+
+            MovL(CPoint.MotionPoint[11 + i], { a = LDAcc, v = LDVel, cp = 100 })
+
             if (CPoint.Paras.OffSet[i] == 1) then
-                MovL(CPoint.MotionPoint[15 + i], { a = LDAcc, v = LDVel, cp = 100 }) --运动到放置过渡点
+                MovL(CPoint.MotionPoint[15 + i], { a = LDAcc, v = LDVel, cp = 100 })
             end
         end
+
         TransMotion(CPoint, Dir.Backward, LDAcc, LDVel)
+
         CPose = GetPose()
         MovJ(CPoint.MotionPoint[7], { a = LDAcc, v = LDVel, cp = 100 })
+
         if (CPoint.Paras.Mode == MotionType.Part) then
             local CPartPick = DeepCopy(PartPick)
             CPartPick.pose[3] = CPartPick.pose[3] - CPoint.Paras.LH +
                 PalletNumber.ProcessNum.PartitionHeight * PalletNumber.Partition.RePartNum
-            MovL(CPartPick, { a = NLDAcc, v = NLDVel, cp = 100 })           --运动到抓取点
+
+            MovL(CPartPick, { a = NLDAcc, v = NLDVel, cp = 100 })
         else
-            MovL(CPoint.MotionPoint[6], { a = LDAcc, v = LDVel, cp = 100 }) --运动到抓取点
+            MovL(CPoint.MotionPoint[6], { a = LDAcc, v = LDVel, cp = 100 })
         end
+
         CloseSucker(PalletNumber, CPoint)
+
         if SimulateMode == 1 then
             UpdatePlaceBoxState(PalletNumber, CPoint)
         end
+
         if (CPoint.Paras.Mode == MotionType.Part) then
             MovJ(CPoint.MotionPoint[7], { a = LDAcc, v = LDVel, cp = 100 })
         end
+
         StandyMotion(PalletNumber, CPoint)
     end
+
     UpdatePartData(PalletNumber, CPoint)
     PrePallet = PalletNumber.Pallet
     PrePoseHeight = CPose.pose[3] + CPoint.Paras.LH
 end
+
 ---------------------------------------------------------------
 --运动主流程
 local function PreMotion(PalletNumber, CQueue)
@@ -1799,3 +2068,212 @@ while true do
     MotionFSM()
 end
 
+
+
+
+-- local function PTPMotion(PalletNumber, CPoint)
+--     local CPose = { pose = {} }
+--     -- 仅用于隔板功能的慢抬升参数
+--     local PartSlowLiftHeight = 20
+--     local PartSlowLiftAcc = 5
+--     local PartSlowLiftVel = 5
+
+--     if (PalletNumber.Mode == WorkType.Pallet) then
+--         Wait(Time.Pick.Pre)
+--         if (CPoint.Paras.Mode == MotionType.Part) then
+--             local CPartPick = DeepCopy(PartPick)
+--             CPartPick.pose[3] = CPartPick.pose[3] - CPoint.Paras.LH +
+--                 PalletNumber.ProcessNum.PartitionHeight * PalletNumber.Partition.RePartNum
+--             MovJ(CPoint.MotionPoint[7], { a = NLDAcc, v = SyncMotionVel, cp = 100 })
+--             SyncMotion(CPoint.Paras.LH)
+--             MovL(CPartPick, { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到抓取点
+--             OpenSucker(PalletNumber, CPoint)
+--             if SimulateMode == 1 then
+--                 UpdatePickBoxState(PalletNumber, CPoint)
+--             end
+
+--             -- 取到隔板后：先慢速抬升 12 mm，再恢复原来的速度回上方点
+--             local CPartPickLift = DeepCopy(CPartPick)
+--             CPartPickLift.pose[3] = CPartPickLift.pose[3] + PartSlowLiftHeight
+--             MovL(CPartPickLift, { a = PartSlowLiftAcc, v = PartSlowLiftVel, cp = 0 })
+
+            
+--             RelMovJUser({0, 0, PartSlowLiftHeight, 0, 0, 0}, {user =  PalletNumber.Coordinate.PartitionUserNum, tool = PalletNumber.Coordinate.ToolNum , a = PartSlowLiftAcc, v = PartSlowLiftVel})
+
+
+
+--             -- local currentJoint = { joint = GetAngle().joint }
+
+--             -- local liftPoint = PositiveKin(currentJoint,
+--             --     { user = PalletNumber.Coordinate.PartitionUserNum, tool = PalletNumber.Coordinate.ToolNum })
+        
+--             -- liftPoint.pose[3] = liftPoint.pose[3] + PartSlowLiftHeight
+        
+--             -- local errId, liftJointPoint = InverseKin(liftPoint,
+--             --     { user = PalletNumber.Coordinate.PartitionUserNum, tool = PalletNumber.Coordinate.ToolNum })
+        
+--             -- if (errId ~= 0) or (liftJointPoint == nil) then
+--             --     Alarm("InverseKin for partition lift failed!", ErrorMessage.Type.PointErr)
+--             -- end
+        
+--             -- MovL(liftJointPoint, { a = PartSlowLiftAcc, v = PartSlowLiftVel, cp = 0 })
+--             -- MovL(CPoint.MotionPoint[7], { a = LDAcc, v = LDVel, cp = 100 }) --运动到抓取点上方
+
+--         else
+--             if ((SingleMotion == false) or (SyncSignal == true)
+--                     or (StateMachine == FSMType.DLR and PalletNumber.Pallet ~= PrePallet)) then
+--                 SingleMotion = true
+--                 MovJ(CPoint.MotionPoint[7], { a = NLDAcc, v = SyncMotionVel, cp = 100 })
+--                 SyncMotion(CPoint.Paras.LH)
+--             end
+--             MovL(CPoint.MotionPoint[6], { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到抓取点
+--             OpenSucker(PalletNumber, CPoint)
+--             if SimulateMode == 1 then
+--                 UpdatePickBoxState(PalletNumber, CPoint)
+--             end
+--             MovL(CPoint.MotionPoint[7], { a = LDAcc, v = LDVel, cp = 100 }) --运动到抓取点上方
+--         end
+--         Wait(Time.Pick.Post)
+--         TransMotion(CPoint, Dir.Forward, LDAcc, LDVel)
+--         for i = 1, CPoint.Paras.Times do
+--             if CPoint.Paras.OffSet[i] == 1 then
+--                 MovL(CPoint.MotionPoint[15 + i], { a = LDAcc, v = LDVel, cp = 100 })         --运动到放置过渡点
+--                 MovL(CPoint.MotionPoint[11 + i], { a = PlaceAcc, v = PlaceSpeed, cp = 100 }) --运动到放置点正上方
+--             else
+--                 MovL(CPoint.MotionPoint[11 + i], { a = LDAcc, v = LDVel, cp = 100 })         --运动到放置点正上方
+--             end
+--             MovL(CPoint.MotionPoint[7 + i], { a = PlaceAcc, v = PlaceSpeed, cp = 100 })
+--             CloseSucker(PalletNumber, CPoint, i)
+--             if SimulateMode == 1 then
+--                 UpdatePlaceBoxState(PalletNumber, CPoint)
+--             end
+--             -- if (CPoint.Paras.Mode == MotionType.Part) then
+--             --     -- 放下隔板后：基于当前位置慢速抬升 12 mm，再恢复原来的返回逻辑
+--             --     local liftPoint = GetPose()
+--             --     liftPoint.pose[3] = liftPoint.pose[3] + PartSlowLiftHeight
+--             --     MovL(liftPoint, { a = PartSlowLiftAcc, v = PartSlowLiftVel, cp = 0 })
+--             -- end
+
+--             -- 以下返回逻辑保持原版风格，不改普通功能
+--             -- UpdateData(PalletNumber, CPoint)
+--             -- if (CPoint.Paras.Times ~= 1) then
+--             --     MovL(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 })     --运动到放置点正上方
+--             --     if CPoint.Paras.OffSet[i] == 1 then
+--             --         MovL(CPoint.MotionPoint[15 + i], { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到放置过渡点
+--             --     end
+--             -- else
+--             --     MovL(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到放置点正上方
+--             -- end
+
+--             UpdateData(PalletNumber, CPoint)
+
+--             MovL(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
+
+--             local DepositLiftHeight = 250
+
+--             if i < CPoint.Paras.Times then
+--                 -- 还有下一个 box
+--                 -- 在当前 arrival point 基础上再抬高 80 mm
+
+--                 local currentJoint = { joint = GetAngle().joint }
+
+--                 local liftPoint = PositiveKin(currentJoint,
+--                     { user = PalletNumber.Coordinate.UserNum, tool = PalletNumber.Coordinate.ToolNum })
+
+--                 liftPoint.pose[3] = liftPoint.pose[3] + DepositLiftHeight
+
+--                 local errId, liftJointPoint = InverseKin(liftPoint,
+--                     { user = PalletNumber.Coordinate.UserNum, tool = PalletNumber.Coordinate.ToolNum })
+
+--                 if (errId ~= 0) or (liftJointPoint == nil) then
+--                     Alarm("InverseKin for deposit lift failed!", ErrorMessage.Type.PointErr)
+--                 end
+
+--                 MovL(liftJointPoint, { a = NLDAcc, v = NLDVel, cp = 0 })
+--             end
+
+--             if CPoint.Paras.OffSet[i] == 1 then
+--                 MovL(CPoint.MotionPoint[15 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
+--             end
+
+--             -- local DepositLiftHeight = 80 -- 第一个盒子放完后额外抬升高度 mm
+
+--             -- if i < CPoint.Paras.Times then
+--             --     -- 不是最后一个 box，说明后面还有第 2 / 第 3 个 box
+--             --     -- 放完当前 box 后，先抬高，避免移动到下一个 box 时刮到其它箱子
+
+--             --     local LiftPoint = DeepCopy(CPoint.MotionPoint[11 + i])
+--             --     LiftPoint.pose[3] = LiftPoint.pose[3] + DepositLiftHeight
+--             --     MovL(LiftPoint, { a = NLDAcc, v = NLDVel, cp = 100 })
+
+--             --     if CPoint.Paras.OffSet[i] == 1 then
+--             --         local OffsetLiftPoint = DeepCopy(CPoint.MotionPoint[15 + i])
+--             --         OffsetLiftPoint.pose[3] = OffsetLiftPoint.pose[3] + DepositLiftHeight
+--             --         MovL(OffsetLiftPoint, { a = NLDAcc, v = NLDVel, cp = 100 })
+--             --     end
+--             -- else
+--             --     -- 最后一个 box，保持原来的返回逻辑即可
+--             --     MovL(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
+
+--             --     if CPoint.Paras.OffSet[i] == 1 then
+--             --         MovL(CPoint.MotionPoint[15 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
+--             --     end
+--             -- end
+--         end
+--         TransMotion(CPoint, Dir.Backward, NLDAcc, NLDVel)
+--         CPose = GetPose()
+--         StandyMotion(PalletNumber, CPoint)
+--     else
+--         if (SingleMotion == false) or (SyncSignal == true)
+--             or (StateMachine == FSMType.DLR and PalletNumber.Pallet ~= PrePallet) then
+--             if SingleMotion == false then
+--                 SingleMotion = true
+--             else
+--                 local Standy = { pose = {} }
+--                 Standy.pose = DeepCopy(CPoint.Paras.Standy.pose)
+--                 Standy.pose[3] = Standy.pose[3] - CPoint.Paras.LH
+--                 MovJ(Standy, { a = NLDAcc, v = SyncMotionVel, cp = 100 })
+--             end
+--             SyncMotion(CPoint.Paras.LH)
+--         end
+--         TransMotion(CPoint, Dir.Forward, NLDAcc, NLDVel)
+--         for i = CPoint.Paras.Times, 1, -1 do
+--             if (CPoint.Paras.OffSet[i] == 1) then
+--                 MovJ(CPoint.MotionPoint[15 + i], { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到放置过渡点
+--             end
+--             MovJ(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 })     --运动到放置点正上方
+--             MovL(CPoint.MotionPoint[7 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
+--             OpenSucker(PalletNumber, CPoint, i)
+--             if SimulateMode == 1 then
+--                 UpdatePickBoxState(PalletNumber, CPoint)
+--             end
+--             UpdateData(PalletNumber, CPoint)
+--             MovL(CPoint.MotionPoint[11 + i], { a = LDAcc, v = LDVel, cp = 100 })     --运动到放置点正上方
+--             if (CPoint.Paras.OffSet[i] == 1) then
+--                 MovL(CPoint.MotionPoint[15 + i], { a = LDAcc, v = LDVel, cp = 100 }) --运动到放置过渡点
+--             end
+--         end
+--         TransMotion(CPoint, Dir.Backward, LDAcc, LDVel)
+--         CPose = GetPose()
+--         MovJ(CPoint.MotionPoint[7], { a = LDAcc, v = LDVel, cp = 100 })
+--         if (CPoint.Paras.Mode == MotionType.Part) then
+--             local CPartPick = DeepCopy(PartPick)
+--             CPartPick.pose[3] = CPartPick.pose[3] - CPoint.Paras.LH +
+--                 PalletNumber.ProcessNum.PartitionHeight * PalletNumber.Partition.RePartNum
+--             MovL(CPartPick, { a = NLDAcc, v = NLDVel, cp = 100 })           --运动到抓取点
+--         else
+--             MovL(CPoint.MotionPoint[6], { a = LDAcc, v = LDVel, cp = 100 }) --运动到抓取点
+--         end
+--         CloseSucker(PalletNumber, CPoint)
+--         if SimulateMode == 1 then
+--             UpdatePlaceBoxState(PalletNumber, CPoint)
+--         end
+--         if (CPoint.Paras.Mode == MotionType.Part) then
+--             MovJ(CPoint.MotionPoint[7], { a = LDAcc, v = LDVel, cp = 100 })
+--         end
+--         StandyMotion(PalletNumber, CPoint)
+--     end
+--     UpdatePartData(PalletNumber, CPoint)
+--     PrePallet = PalletNumber.Pallet
+--     PrePoseHeight = CPose.pose[3] + CPoint.Paras.LH
+-- end
