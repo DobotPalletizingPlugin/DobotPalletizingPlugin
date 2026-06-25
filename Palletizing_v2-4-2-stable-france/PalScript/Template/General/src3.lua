@@ -40,6 +40,8 @@ local function CreatePalletData(PalletType)
         Standy = { pose = {} },
         PartPick = { pose = {} },
         PartPlace = { pose = {} },
+        PartPickTeachJ6 = nil, --隔板取料示教点J6，用于保持MotionPoint[6]的第6轴不被逆解改写
+        PartTransTeachJ6 = {}, --隔板示教过渡点J6，用于保持MotionPoint[1~5]的第6轴不被改写
         Pallet = PalletType,
         User = 0,
         Tool = {
@@ -146,8 +148,10 @@ local function GetTeachPoint(PalletNumber, CData)
             if (ProjectType == 1) then
                 local PartPickJoint = { joint = {} }
                 PartPickJoint.joint = DeepCopy(PalletNumber.TeachPoint.TeachPartitionPickPoint.joint)
+                CData.PartPickTeachJ6 = PartPickJoint.joint[6]
                 CData.PartPick = PositiveKin(PartPickJoint, { user = CData.User, tool = CData.Tool.Conc })
             else
+                CData.PartPickTeachJ6 = nil
                 CData.PartPick.pose = DeepCopy(PalletNumber.TeachPoint.TeachPartitionPickPoint.pose)
                 CData.PartPick.pose[3] = CData.PartPick.pose[3] - PalletNumber.ProcessNum.PalletHeight
             end
@@ -160,6 +164,17 @@ local function GetTeachPoint(PalletNumber, CData)
             else
                 CData.PartPlace.pose = DeepCopy(PalletNumber.TeachPoint.TeachPartitionPlacePoint.pose)
                 CData.PartPlace.pose[3] = CData.PartPlace.pose[3] - PalletNumber.ProcessNum.PalletHeight
+            end
+
+            --保存隔板示教过渡点J6，避免后续统一改成放置点J6
+            CData.PartTransTeachJ6 = {}
+            for i = 1, PalletNumber.TransPartitionPointNum do
+                if (PalletNumber.TeachPoint.TransPartitionPoint.joint[i] ~= nil)
+                    and (CheckTableData(PalletNumber.TeachPoint.TransPartitionPoint.joint[i]) == 1) then
+                    CData.PartTransTeachJ6[i] = PalletNumber.TeachPoint.TransPartitionPoint.joint[i][6]
+                else
+                    CData.PartTransTeachJ6[i] = nil
+                end
             end
         end
         CData.Init = true
@@ -270,6 +285,10 @@ local function GetPickPlacePoint(PalletNumber, CData)
         if (CData.Index > CData.CompNum) then
             PlacePose.pose[3] = PlacePose.pose[3] - PalletNumber.CompensateZData
         end
+        --隔板放置点比原始计算点抬高10mm，避免隔板下压过深
+        if (Res.Mode == MotionType.Part) then
+            PlacePose.pose[3] = PlacePose.pose[3] + 10
+        end
         if (PalletNumber.Mode == WorkType.Pallet) then
             OffSet[i], Res.Sucker = GetBoxProPerty(PalletName, CData.Pallet, CData.Index + i - 1)
             if (OffSet[i][1] == 0) and (OffSet[i][2] == 0) then
@@ -312,7 +331,12 @@ local function GetAutoGenPoint(PalletNumber, CData)
     Res.TransNum = CheckTableData(TPoint.pose)
     if Res.TransNum > 0 then
         TPoint = GetAddUserPos(0, PalletNumber.Coordinate.UserNum, TPoint)
-        TPoint.pose[6] = Point.Pose[8][6] --过渡点与放置姿态一致
+        if Res.Mode == MotionType.Part then
+            --隔板自动过渡点固定为放置点上方100mm，避免沿用过高的示教/自动点Z
+            TPoint.pose[3] = Point.Pose[8][3] + 100
+        else
+            TPoint.pose[6] = Point.Pose[8][6] --常规过渡点与放置姿态一致
+        end
         Point.Pose[1] = DeepCopy(TPoint.pose)
     else
         Point.Pose[1] = { 0, 0, 0, 0, 0, 0 }
@@ -330,24 +354,37 @@ local function GetTransPoint(PalletNumber)
         CopyPoint = DeepCopy(PalletNumber.TeachPoint.TransPlacePoint)
     end
     local PHeight = Point.Pose[6][3] + TeachPointOffHeight
-    local THeight = Point.Pose[8][3] + PalletNumber.OffsetHeight + OffSet[1][3]
+    local THeight = 0
+    if Res.Mode == MotionType.Part then
+        --隔板示教过渡点参考放置点：最后一个过渡点固定为放置点上方200mm
+        THeight = Point.Pose[8][3] + 200
+    else
+        --常规箱子过渡点保持原逻辑
+        THeight = Point.Pose[8][3] + PalletNumber.OffsetHeight + OffSet[1][3]
+    end
 
     for i = 1, Res.TransNum do
-        if (Res.Mode == MotionType.Part) then
-            if (i > Res.TransNum - 2) then
-                CopyPoint.pose[i][6] = Point.Pose[8][6]
-            end
-        else
-            CopyPoint.pose[i][6] = Point.Pose[8][6] --过渡点与放置姿态一致
+        if Res.Mode ~= MotionType.Part then
+            CopyPoint.pose[i][6] = Point.Pose[8][6] --常规过渡点与放置姿态一致
         end
 
-        if CopyPoint.mode[i] == 0 then
-            if CopyPoint.pose[i][3] <= THeight then
+        if Res.Mode == MotionType.Part then
+            --隔板最后一个示教过渡点必须贴近放置点，固定为放置点上方200mm
+            --这里不再受CopyPoint.mode[i]限制，也不再用PHeight抬高
+            if i == Res.TransNum then
+                CopyPoint.pose[i][3] = THeight
+            elseif (CopyPoint.mode[i] == 0) and (CopyPoint.pose[i][3] <= THeight) then
                 CopyPoint.pose[i][3] = THeight
             end
+        else
+            if CopyPoint.mode[i] == 0 then
+                if CopyPoint.pose[i][3] <= THeight then
+                    CopyPoint.pose[i][3] = THeight
+                end
 
-            if CopyPoint.pose[i][3] <= PHeight then
-                CopyPoint.pose[i][3] = PHeight
+                if CopyPoint.pose[i][3] <= PHeight then
+                    CopyPoint.pose[i][3] = PHeight
+                end
             end
         end
 
@@ -398,9 +435,11 @@ end
 -----------------------------------------------------------------
 --获取点位结果
 local function GetResult(CData)
-    local Ret = { MotionPoint = {}, Paras = {} }
+    local Ret = { MotionPoint = {}, BackwardMotionPoint = {}, Paras = {} }
     local ToolNum = 0
     local CJoint = {}
+    local BackwardTransJ6 = nil
+    local StandyJoint = nil
     if (Res.Mode == MotionType.Part) then
         ToolNum = math.abs(PalletSuckerFunction) - 1
     else
@@ -411,32 +450,77 @@ local function GetResult(CData)
         end
     end
     CJoint, Res.LH, Res.ErrIndex = GetInvK(PalletName, CData.Pallet, Point.Pose, ToolNum)
+
+    --隔板回程过渡点使用终点standby的J6；forward过渡点仍保持示教J6
+    if (Res.Mode == MotionType.Part) and (Res.Standy ~= nil) and (Res.Standy.pose ~= nil) then
+        local Standy = { pose = {} }
+        Standy.pose = DeepCopy(Res.Standy.pose)
+        Standy.pose[3] = Standy.pose[3] - Res.LH
+        local ErrId = 0
+        ErrId, StandyJoint = InverseKin(Standy)
+        if (ErrId == 0) and (StandyJoint ~= nil) and (StandyJoint.joint ~= nil) then
+            BackwardTransJ6 = StandyJoint.joint[6]
+            Ret.StandyMotionPoint = DeepCopy(StandyJoint)
+        else
+            LogWarn("InverseKin for partition standby failed, backward transition J6 will keep forward J6!")
+        end
+    end
+
     for i = 1, 19 do
         Ret.MotionPoint[i] = { joint = CJoint[i] }
-        -- if (Res.Mode == MotionType.Part) then
-        --     -- 隔板：只有最后2个过渡点使用放置A点对应的joint6
-        --     if ((i > Res.TransNum - 2 and i <= Res.TransNum) or i == 12 or i == 16) then
-        --         Ret.MotionPoint[i].joint[6] = CJoint[8][6]
-        --     end
-        -- else
-        --     -- 普通箱子：保持原先逻辑，1~5过渡点都使用放置A点对应的joint6
-        --     if (i < 6 or i == 12 or i == 16) then
-        --         Ret.MotionPoint[i].joint[6] = CJoint[8][6]
-        --     end
-        -- end
-        -- if (i == 13 or i == 17) then
-        --     Ret.MotionPoint[i].joint[6] = CJoint[9][6]
-        -- end
-        -- if (i == 14 or i == 18) then
-        --     Ret.MotionPoint[i].joint[6] = CJoint[10][6]
-        -- end
-        -- if (i == 15 or i == 19) then
-        --     Ret.MotionPoint[i].joint[6] = CJoint[11][6]
-        -- end
+        if (i < 6) then
+            if (Res.Mode == MotionType.Part) then
+                if (CData.PartTransTeachJ6 ~= nil) and (CData.PartTransTeachJ6[i] ~= nil) then
+                    Ret.MotionPoint[i].joint[6] = CData.PartTransTeachJ6[i]
+                end
+            else
+                -- 常规过渡点原逻辑会把过渡点J6强制改成放置点J6。
+                -- 但当过渡点J5接近 ±90° 时，J4/J6处在腕部奇异附近，强行改J6会制造另一套关节分支，
+                -- 后续从取货点/standby到过渡点容易报 Preprocessing point exceeds joint limit。
+                if (Ret.MotionPoint[i].joint[5] ~= nil)
+                    and (math.abs(math.abs(Ret.MotionPoint[i].joint[5]) - 90) < 3) then
+                    -- 接近奇异区：保留GetInvK给出的J6，后续src0会再按当前J6选择最近等效角。
+                else
+                    Ret.MotionPoint[i].joint[6] = CJoint[8][6]
+                end
+            end
+        end
+        if (i == 12 or i == 16) then
+            Ret.MotionPoint[i].joint[6] = CJoint[8][6]
+        end
+        if (i == 13 or i == 17) then
+            Ret.MotionPoint[i].joint[6] = CJoint[9][6]
+        end
+        if (i == 14 or i == 18) then
+            Ret.MotionPoint[i].joint[6] = CJoint[10][6]
+        end
+        if (i == 15 or i == 19) then
+            Ret.MotionPoint[i].joint[6] = CJoint[11][6]
+        end
     end
+
+    --隔板回程过渡点副本：J1~J5保持逆解，J6统一改为standby终点J6
+    if (Res.Mode == MotionType.Part) then
+        for i = 1, Res.TransNum do
+            if (type(Ret.MotionPoint[i]) == "table") then
+                Ret.BackwardMotionPoint[i] = DeepCopy(Ret.MotionPoint[i])
+                if (BackwardTransJ6 ~= nil) and (Ret.BackwardMotionPoint[i].joint ~= nil) then
+                    Ret.BackwardMotionPoint[i].joint[6] = BackwardTransJ6
+                end
+            end
+        end
+    end
+
+    --隔板取料点[6]保持示教时的J6，避免逆解重新选择第6轴角度
+    if (Res.Mode == MotionType.Part) and (CData.PartPickTeachJ6 ~= nil) then
+        Ret.MotionPoint[6].joint[6] = CData.PartPickTeachJ6
+    end
+
     Ret.Paras = DeepCopy(Res)
+    Ret.Paras.BackwardTransJ6 = BackwardTransJ6
     return Ret
 end
+
 -----------------------------------------------------------------
 --获取点位
 local function GetPoint(PalletNumber, CData)

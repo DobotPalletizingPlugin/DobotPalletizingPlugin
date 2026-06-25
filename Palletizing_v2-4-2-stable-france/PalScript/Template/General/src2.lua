@@ -87,6 +87,57 @@ local function InitWorkingData(PalletNumber)
     end
 end
 ---------------------------------------------------------------
+--根据隔板余量传感器同步隔板数量
+--DI = ON/1：认为料仓有隔板，恢复默认隔板数量，并写入Modbus/SetVal
+--DI = OFF/0：认为料仓无隔板，将剩余隔板数量置为0，并写入Modbus/SetVal
+local function SyncPartitionRemainBySensor(PalletNumber, ForceLog)
+    if (PalletNumber == nil) or (PalletNumber.Partition == nil) then
+        return
+    end
+
+    if (PalletNumber.Partition.Enable ~= true) or (PalletNumber.Mode ~= WorkType.Pallet) then
+        return
+    end
+
+    if (PartSensorCfg == nil) or (PartSensorCfg.Enable ~= true) then
+        return
+    end
+
+    if (PartSensorCfg.Port == nil) or (PartSensorCfg.Port.A == nil) then
+        LogWarn("Partition remain sensor DI is not configured!")
+        return
+    end
+
+    if SimulateMode == 1 then
+        return
+    end
+
+    local DelayTime = PartSensorCfg.DelayTime or 0
+    local SensorState = CheckDIRes(PartSensorCfg.Port.Mode, PartSensorCfg.Port.A)
+
+    if DelayTime > 0 then
+        Wait(DelayTime)
+        SensorState = CheckDIRes(PartSensorCfg.Port.Mode, PartSensorCfg.Port.A)
+    end
+
+    local TargetPartNum = 0
+    if SensorState == ON then
+        TargetPartNum = PalletNumber.ProcessNum.PartitionNum
+    end
+
+    if (PalletNumber.Partition.RePartNum ~= TargetPartNum) or (ForceLog == true) then
+        PalletNumber.Partition.RePartNum = TargetPartNum
+        WritePartNum(PalletNumber)
+        if SensorState == ON then
+            LogInfo("Partition remain sensor DI%s is ON. Restore remaining partition number to default and write Modbus: %s.",
+                tostring(PartSensorCfg.Port.A), tostring(PalletNumber.Partition.RePartNum))
+        else
+            LogWarn("Partition remain sensor DI%s is OFF. Set remaining partition number to 0 and write Modbus.",
+                tostring(PartSensorCfg.Port.A))
+        end
+    end
+end
+---------------------------------------------------------------
 --更新码垛参数
 local function InitData(PalletNumber)
     if (PalletNumber.State.Replace == true) and (PalletNumber.State.Init == false) then
@@ -99,8 +150,9 @@ local function InitData(PalletNumber)
                 SimulateProcess.MqttConnected = 1
             end
         end
-        ReadPalletNum(PalletNumber) --读取栈板上已有料箱层数、剩余料箱数
-        ReadProductionData()        --读取产能数据
+        ReadPalletNum(PalletNumber)          --读取栈板上已有料箱层数、剩余料箱数
+        SyncPartitionRemainBySensor(PalletNumber, true) --隔板数量由DI传感器初始化覆盖，并写入Modbus/SetVal
+        ReadProductionData()                 --读取产能数据
 
         local BoxNum = 0
         local LayerBoxNum = 0
@@ -249,6 +301,8 @@ local function CheckPallet(PalletNumber)
         end
         CommitCapacityPallet()
         InitWorkingData(PalletNumber)
+        -- 新托盘/ACK复位后，先按隔板传感器刷新隔板数量，再上传数量。
+        SyncPartitionRemainBySensor(PalletNumber, true)
         PalletNumber.State.Done = false
 
         CommitPalletNum(PalletNumber)     --上传已有料箱层数、剩余料箱数
@@ -329,6 +383,8 @@ end
 local function ExecuteDeteData(PalletNumber)
     Wait(Time.Thread.s2)
     if (PalletNumber.State.Init == true) then
+        -- 周期同步隔板数量：补充隔板后DI=ON时，也能恢复默认值并写入Modbus/SetVal
+        SyncPartitionRemainBySensor(PalletNumber, false)
         CycleCheckPallet(PalletNumber)
         PalletStateCheck(PalletNumber)
         CheckPallet(PalletNumber)

@@ -1,6 +1,6 @@
 {
   "name": "Palletizing",
-  "description": "%{tr_dobot_description_palletizing}",
+  "description": "ERM partition palletizing path optimization",
   "version": "2-4-2-stable-france",
   "scriptVersion": "2-4-2-stable-0330",
   "hotkey": true,

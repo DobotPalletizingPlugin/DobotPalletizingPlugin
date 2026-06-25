@@ -30,7 +30,7 @@ local PrePoseHeight = 0    --缠膜高度
 ---------------------------------------------------------------
 -- 系统初始化
 ---------------------------------------------------------------
---坐标系重定义
+--坐标系重定义。
 local function SetCoordinate(PalletNumber, PalletNum)
     PalletNumber.Layer = GetLayerCnt(PalletName, PalletNum)
     PalletNumber.Coordinate.UserNum = GetPalletUser(PalletName, PalletNum)
@@ -155,6 +155,64 @@ local function InitStorageMode()
     if (GetVal("PalletPartPlaceB") == nil) then
         SetVal("PalletPartPlaceB", SecondPallet.Partition.Place)
     end
+end
+
+---------------------------------------------------------------
+--根据隔板余量传感器同步隔板数量（src0启动阶段/运动前使用）
+--DI = ON/1：认为料仓有隔板，恢复默认隔板数量，并写入Modbus/SetVal
+--DI = OFF/0：认为料仓无隔板，将剩余隔板数量置为0，并写入Modbus/SetVal
+local function SyncPartitionRemainBySensor(PalletNumber, ForceLog)
+    if (PalletNumber == nil) or (PalletNumber.Partition == nil) then
+        return
+    end
+
+    if (PalletNumber.Partition.Enable ~= true) or (PalletNumber.Mode ~= WorkType.Pallet) then
+        return
+    end
+
+    if (PartSensorCfg == nil) or (PartSensorCfg.Enable ~= true) then
+        return
+    end
+
+    if (PartSensorCfg.Port == nil) or (PartSensorCfg.Port.A == nil) then
+        LogWarn("Partition remain sensor DI is not configured!")
+        return
+    end
+
+    if SimulateMode == 1 then
+        return
+    end
+
+    local DelayTime = PartSensorCfg.DelayTime or 0
+    local SensorState = CheckDIRes(PartSensorCfg.Port.Mode, PartSensorCfg.Port.A)
+
+    if DelayTime > 0 then
+        Wait(DelayTime)
+        SensorState = CheckDIRes(PartSensorCfg.Port.Mode, PartSensorCfg.Port.A)
+    end
+
+    local TargetPartNum = 0
+    if SensorState == ON then
+        TargetPartNum = PalletNumber.ProcessNum.PartitionNum
+    end
+
+    if (PalletNumber.Partition.RePartNum ~= TargetPartNum) or (ForceLog == true) then
+        PalletNumber.Partition.RePartNum = TargetPartNum
+        WritePartNum(PalletNumber)
+        if SensorState == ON then
+            LogInfo("Partition remain sensor DI%s is ON before ACK/motion. Restore remaining partition number to default and write Modbus: %s.",
+                tostring(PartSensorCfg.Port.A), tostring(PalletNumber.Partition.RePartNum))
+        else
+            LogWarn("Partition remain sensor DI%s is OFF before ACK/motion. Set remaining partition number to 0 and write Modbus.",
+                tostring(PartSensorCfg.Port.A))
+        end
+    end
+end
+---------------------------------------------------------------
+--启动阶段同步两侧隔板数量。必须在ACK/隔板不足判断前执行，否则HMI仍会看到旧的0。
+local function SyncAllPartitionRemainBySensor(ForceLog)
+    SyncPartitionRemainBySensor(FirstPallet, ForceLog)
+    SyncPartitionRemainBySensor(SecondPallet, ForceLog)
 end
 ---------------------------------------------------------------
 --升降柱运动命令
@@ -772,6 +830,10 @@ local function RobotGoHome()
     end
     MovJ(HomePoint, { a = NLDAcc * 0.25, v = NLDVel * 0.25, cp = 100 })
     LogInfo("Robot go home success!")
+	local value1 = GetHoldRegs(1, 5007, 1, "U16")
+	print(value1)
+	local value2 = GetHoldRegs(1, 5009, 1, "U16")
+	print(value2)
 end
 ---------------------------------------------------------------
 --获取点位模式
@@ -1060,6 +1122,8 @@ local function InitSucker()
             SuckerControll(SuckerCfg.Dete.VacuumBreak, OFF, math.abs(PalletSuckerFunction))
         end
     end
+	DO(15,OFF)
+	DO(17,OFF)
     LogInfo("Initialized sucker success!")
 end
 ---------------------------------------------------------------
@@ -1120,29 +1184,48 @@ local function OpenSucker(PalletNumber, CPoint, CIndex)
                 if (PalletNumber.Mode == WorkType.Pallet) then
                     BoxNum = math.abs(PalletSuckerFunction)
                     SuckerControll(SuckerCfg.Port, ON, BoxNum)
+                    DO(15, ON)
                     Wait(1000)
                     local DOs = { SuckerCfg.Port.A, SuckerCfg.Port.B, SuckerCfg.Port.C, SuckerCfg.Port.D }
                     for i = 1, BoxNum do
                         VerifySuckerDO(SuckerCfg.Port, DOs[i], ON)
                     end
+                    DO(15, ON)
+                  
                 else
                     BoxNum = CIndex
                     if (CIndex == 1) then
                         IORes(SuckerCfg.Port.Mode, SuckerCfg.Port.A, ON)
+                        DO(15, ON)
+                       
                         Wait(1000)
                         VerifySuckerDO(SuckerCfg.Port, SuckerCfg.Port.A, ON)
+                        DO(15, ON)
+                        
                     elseif (CIndex == 2) then
                         IORes(SuckerCfg.Port.Mode, SuckerCfg.Port.B, ON)
+                        DO(15, ON)
+                        
                         Wait(1000)
                         VerifySuckerDO(SuckerCfg.Port, SuckerCfg.Port.B, ON)
+                        DO(15, ON)
+                       
                     elseif (CIndex == 3) then
                         IORes(SuckerCfg.Port.Mode, SuckerCfg.Port.C, ON)
+                        DO(15, ON)
+                        
                         Wait(1000)
                         VerifySuckerDO(SuckerCfg.Port, SuckerCfg.Port.C, ON)
+                        DO(15, ON)
+                       
                     elseif (CIndex == 4) then
                         IORes(SuckerCfg.Port.Mode, SuckerCfg.Port.D, ON)
+                        DO(15, ON)
+                        
                         Wait(1000)
                         VerifySuckerDO(SuckerCfg.Port, SuckerCfg.Port.D, ON)
+                        DO(15, ON)
+                       
                     end
                 end
                 SuckerSafeIO(OFF)
@@ -1152,17 +1235,22 @@ local function OpenSucker(PalletNumber, CPoint, CIndex)
             else
                 BoxNum = math.ceil(0.5 * CPoint.Paras.Sucker) + 1
                 SuckerControll(SuckerCfg.Port, ON, BoxNum)
+                DO(15, ON)
+               
                 Wait(1000)
                 local DOs = { SuckerCfg.Port.A, SuckerCfg.Port.B, SuckerCfg.Port.C, SuckerCfg.Port.D }
                 for i = 1, BoxNum do
                     VerifySuckerDO(SuckerCfg.Port, DOs[i], ON)
                 end
+                DO(15, ON)
+                
                 SuckerSafeIO(OFF)
             end
             Wait(Time.Pick.In)
             CTool = CalcEccTool(PalletNumber, CPoint.Paras.Sucker, BoxNum)
+            
             SetPayload(BoxNum * PalletNumber.BoxProperty.BoxWeight + ToolWeight,
-                { CTool[1], CTool[2], 0.5 * (CTool[3] + PalletNumber.BoxProperty.BoxHigh) }) --设置负载指令，加上箱子重量
+                { CTool[1], CTool[2], 0.5 * (CTool[3] + PalletNumber.BoxProperty.BoxHigh) }) --commande de réglage de la charge, ajouter le poids de la boîte
         end,
         [MotionType.Part] = function()
             if (PartCfg.Enable == true) then
@@ -1171,10 +1259,13 @@ local function OpenSucker(PalletNumber, CPoint, CIndex)
                 TCPWrite(Communication.Sucker.Tcp.Socket, Communication.Sucker.Command.VacuumOn)
             else
                 SuckerControll(SuckerCfg.Port, ON, math.abs(PalletSuckerFunction))
+                DO(15, ON)
+                
                 SuckerSafeIO(OFF)
             end
             Wait(Time.Pick.In)
             CTool = CalcEccTool(PalletNumber, CPoint.Paras.Sucker, PalletSuckerFunction)
+            
             SetPayload(PalletNumber.ProcessNum.PartitionWeight + ToolWeight,
                 { CTool[1], CTool[2], 0.5 * CTool[3] }) --设置负载指令，加上箱子重量
         end
@@ -1198,7 +1289,7 @@ local function CloseSucker(PalletNumber, CPoint, CIndex)
         CTool = CalcEccTool(PalletNumber, CPoint.Paras.Sucker, CIndex)
     end
     local Weight = (PalletSuckerFunction - CIndex) * PalletNumber.BoxProperty.BoxWeight + ToolWeight
-    SetPayload(Weight, { CTool[1], CTool[2], 0.5 * CTool[3] }) ---设置负载为吸取箱子的负载
+       SetPayload(Weight, { CTool[1], CTool[2], 0.5 * CTool[3] }) ---définir la charge utile comme la charge correspondant à la prise (aspiration) de la boîte
     LogInfo("BoxWeight: %s", Weight)
     local SwitchCloseSucker =
     {
@@ -1214,6 +1305,7 @@ local function CloseSucker(PalletNumber, CPoint, CIndex)
                     elseif (CIndex == 4) then
                         IORes(SuckerCfg.Port.Mode, SuckerCfg.Port.D, OFF)
                     end
+                    DO(15, OFF)
                     SuckerSafeIO(ON)
                     if (SuckerCfg.Dete.VacuumBreak.Enable == 1) then
                         if (CIndex == 1) then
@@ -1225,6 +1317,7 @@ local function CloseSucker(PalletNumber, CPoint, CIndex)
                         elseif (CIndex == 4) then
                             IORes(SuckerCfg.Dete.VacuumBreak.Mode, SuckerCfg.Dete.VacuumBreak.D, ON)
                         end
+                        DO(17, ON)
                         Wait(Time.Place.In)
                         if (CIndex == 1) then
                             IORes(SuckerCfg.Dete.VacuumBreak.Mode, SuckerCfg.Dete.VacuumBreak.A, OFF)
@@ -1235,15 +1328,19 @@ local function CloseSucker(PalletNumber, CPoint, CIndex)
                         elseif (CIndex == 4) then
                             IORes(SuckerCfg.Dete.VacuumBreak.Mode, SuckerCfg.Dete.VacuumBreak.D, OFF)
                         end
+                        DO(17, OFF)
                         return
                     end
                 else
                     SuckerControll(SuckerCfg.Port, OFF, math.abs(PalletSuckerFunction))
+                    DO(15, OFF)
                     SuckerSafeIO(ON)
                     if (SuckerCfg.Dete.VacuumBreak.Enable == 1) then
                         SuckerControll(SuckerCfg.Dete.VacuumBreak, ON, math.abs(PalletSuckerFunction))
+                        DO(17, ON)
                         Wait(Time.Place.In)
                         SuckerControll(SuckerCfg.Dete.VacuumBreak, OFF, math.abs(PalletSuckerFunction))
+                        DO(17, OFF)
                         return
                     end
                 end
@@ -1251,15 +1348,20 @@ local function CloseSucker(PalletNumber, CPoint, CIndex)
                 TCPWrite(Communication.Sucker.Tcp.Socket, Communication.Sucker.Command.VacuumOff)
             else
                 SuckerControll(SuckerCfg.Port, OFF, math.ceil(0.5 * CPoint.Paras.Sucker) + 1)
+                DO(15, OFF)
                 SuckerSafeIO(ON)
                 if (SuckerCfg.Dete.VacuumBreak.Enable == 1) then
                     SuckerControll(SuckerCfg.Dete.VacuumBreak, ON, math.ceil(0.5 * CPoint.Paras.Sucker) + 1)
+                    DO(17, ON)
                     Wait(Time.Place.In)
                     SuckerControll(SuckerCfg.Dete.VacuumBreak, OFF, math.ceil(0.5 * CPoint.Paras.Sucker) + 1)
+                    DO(17, OFF)
                     return
                 end
             end
+            DO(17, ON)
             Wait(Time.Place.In)
+            DO(17, OFF)
         end,
         [MotionType.Part] = function()
             if (PartCfg.Enable == true) then
@@ -1268,15 +1370,20 @@ local function CloseSucker(PalletNumber, CPoint, CIndex)
                 TCPWrite(Communication.Sucker.Tcp.Socket, Communication.Sucker.Command.VacuumOff)
             else
                 SuckerControll(SuckerCfg.Port, OFF, math.abs(PalletSuckerFunction))
+                DO(15, OFF)
                 SuckerSafeIO(ON)
                 if (SuckerCfg.Dete.VacuumBreak.Enable == 1) then
                     SuckerControll(SuckerCfg.Dete.VacuumBreak, ON, math.abs(PalletSuckerFunction))
+                    DO(17, ON)
                     Wait(Time.Place.In)
                     SuckerControll(SuckerCfg.Dete.VacuumBreak, OFF, math.abs(PalletSuckerFunction))
+                    DO(17, OFF)
                     return
                 end
             end
+            DO(17, ON)
             Wait(Time.Place.In)
+            DO(17, OFF)
         end
     }
 
@@ -1357,24 +1464,153 @@ local function FilmMotion()
     end
 end
 ---------------------------------------------------------------
+--J1安全分支归一化：本项目禁止J1继续向负方向绕到操作员侧
+--现场安全分支：当前隔板放置后约-50°，安全点90°，取货点约150°
+--因此目标J1如果被逆解成-210°/-270°，需要转换成等效的150°/90°
+local J1SafeMin = -60
+local J1SafeMax = 200
+
+local function NormalizeJ1ToSafeBranch(j1)
+    if j1 == nil then
+        return j1
+    end
+
+    while j1 < J1SafeMin do
+        j1 = j1 + 360
+    end
+
+    while j1 > J1SafeMax do
+        j1 = j1 - 360
+    end
+
+    if (j1 < J1SafeMin) or (j1 > J1SafeMax) then
+        LogError("J1 target out of safe branch: %s", tostring(j1))
+        Alarm("J1 target out of safe branch!", ErrorMessage.Type.PointErr)
+    end
+
+    return j1
+end
+
+-- J6 soft limit is narrower than an unlimited equivalent-angle normalization.
+-- The controller accepts equivalent wrist angles only inside the joint software limit.
+-- In the latest fault, current J6 was about -329°, and the previous "nearest angle" logic
+-- converted the next target to -443°, which is mathematically equivalent but outside J6 limit.
+local J6SoftMin = -360
+local J6SoftMax = 360
+
+local function NormalizeJ6ToValidRange(j6, UseCurrentNearest)
+    if j6 == nil then
+        return j6
+    end
+
+    local RefJ6 = j6
+    if UseCurrentNearest == true then
+        local CurrentJoint = GetAngle().joint
+        if (CurrentJoint ~= nil) and (CurrentJoint[6] ~= nil) then
+            RefJ6 = CurrentJoint[6]
+        end
+    end
+
+    local BestJ6 = nil
+    local BestDiff = nil
+
+    -- Try all nearby equivalent angles and choose the one inside the soft limit.
+    -- If UseCurrentNearest=true, choose the valid one closest to current J6.
+    -- If UseCurrentNearest=false, normally the original taught/calculated value is kept.
+    for k = -3, 3 do
+        local Candidate = j6 + 360 * k
+        if (Candidate >= J6SoftMin) and (Candidate <= J6SoftMax) then
+            local Diff = math.abs(Candidate - RefJ6)
+            if (BestJ6 == nil) or (Diff < BestDiff) then
+                BestJ6 = Candidate
+                BestDiff = Diff
+            end
+        end
+    end
+
+    if BestJ6 ~= nil then
+        return BestJ6
+    end
+
+    LogError("J6 target out of software limit after normalization: %s", tostring(j6))
+    Alarm("J6 target out of software limit!", ErrorMessage.Type.PointErr)
+    return j6
+end
+
+local function NormalizeJointForSafeBranch(Point, NormalizeJ6)
+    local P = DeepCopy(Point)
+
+    if (P ~= nil) and (P.joint ~= nil) then
+        P.joint[1] = NormalizeJ1ToSafeBranch(P.joint[1])
+        -- Always keep J6 inside the software limit.
+        -- NormalizeJ6=true only means "prefer the equivalent angle closest to current J6".
+        P.joint[6] = NormalizeJ6ToValidRange(P.joint[6], NormalizeJ6 == true)
+    end
+
+    return P
+end
+
+local function SafeMovJ(Point, Option, NormalizeJ6)
+    local P = NormalizeJointForSafeBranch(Point, NormalizeJ6)
+    MovJ(P, Option)
+end
+
+local function SafeMovL(Point, Option, NormalizeJ6)
+    local P = NormalizeJointForSafeBranch(Point, NormalizeJ6)
+    MovL(P, Option)
+end
+
+---------------------------------------------------------------
 --过渡点运动
 local function TransMotion(CPoint, CDir, Acc, Vel)
     local SD = 1
     local ED = CPoint.Paras.TransNum
-
     if (CDir == Dir.Backward) then
         SD = CPoint.Paras.TransNum
         ED = 1
     end
     for i = SD, ED, CDir do
-        if (type(CPoint.MotionPoint[i]) == "table") then
-            if (PalletObstacleFunc == 1) then
-                MovL(CPoint.MotionPoint[i], { a = Acc, v = Vel, cp = 100 }) --运动到层过渡点
-            else
-                if (CDir == Dir.Backward) then
-                    MovJ(CPoint.MotionPoint[i], { a = Acc, v = Vel, cp = 100 }) --运动到层过渡点
+        local TPoint = CPoint.MotionPoint[i]
+        if (CDir == Dir.Backward)
+            and (CPoint.BackwardMotionPoint ~= nil)
+            and (type(CPoint.BackwardMotionPoint[i]) == "table") then
+            -- backward使用src3提供的回程过渡点：J6已经改为终点standby的J6
+            TPoint = CPoint.BackwardMotionPoint[i]
+        end
+
+        if (type(TPoint) == "table") then
+            -- 普通箱子过渡点/回程过渡点主要用于安全换姿态，不是工艺直线路径。
+            -- 使用 MovL 走普通 joint transition 时，J5 接近 ±90° 或 J6 跨分支会增加预处理失败风险。
+            -- 但隔板 forward 是实际取隔板后的贴近/放置路径，需要保留 MovL。
+            local TAcc = Acc
+            local TVel = Vel
+            if (TAcc == nil) or (TAcc > 30) then
+                TAcc = 30
+            end
+            if (TVel == nil) or (TVel > 30) then
+                TVel = 30
+            end
+
+            if (CDir == Dir.Backward) then
+                if (CPoint.Paras.Mode == MotionType.Part) then
+                    -- 隔板 backward：从隔板/支架区域退出时保留 MovL，避免 MovJ 走非直线路径扫到隔板支架
+                    -- cp=0：尽量按 backward transition 点精确退出，底层更安全
+                    -- J1归一到安全分支，J6选择当前最近且在软限位内的等效角
+                    SafeMovL(TPoint, { a = TAcc, v = TVel, cp = 0 }, true)
                 else
-                    MovL(CPoint.MotionPoint[i], { a = Acc, v = Vel, cp = 100 }) --运动到层过渡点
+                    -- 普通箱子 backward：不是工艺直线路径，继续用 MovJ，降低奇异区/软限位风险
+                    -- J1归一到安全分支，J6选择当前最近且在软限位内的等效角
+                    SafeMovJ(TPoint, { a = TAcc, v = TVel, cp = 0 }, true)
+                end
+            else
+                if (CPoint.Paras.Mode == MotionType.Part) then
+                    -- 隔板 forward：取隔板后到放隔板区域必须用 MovL，保持现场示教的贴近/放置效果
+                    -- 这里只做J1安全分支和J6软限位检查，不再把J6强行贴近当前角度
+                    SafeMovL(TPoint, { a = TAcc, v = TVel, cp = 100 }, false)
+                else
+                    -- 普通箱子 forward：不是工艺直线贴合路径，继续用 MovJ，避免J5≈±90°时MovL预处理失败
+                    -- J6选择当前最近且在软限位内的等效角，防止再次生成-443°这类非法角度
+                    SafeMovJ(TPoint, { a = TAcc, v = TVel, cp = 0 }, true)
                 end
             end
         end
@@ -1401,25 +1637,194 @@ local function SyncMotion(CLH)
     end
 end
 ---------------------------------------------------------------
+--获取隔板standby关节，供backward过渡点和standby共用同一个J6
+local function GetPartitionStandbyJoint(CPoint)
+    local Standy = { pose = {} }
+    Standy.pose = DeepCopy(CPoint.Paras.Standy.pose)
+    Standy.pose[3] = Standy.pose[3] - CPoint.Paras.LH
+
+    local ErrId, StandyJoint = InverseKin(Standy)
+    if (ErrId ~= 0) or (StandyJoint == nil) or (StandyJoint.joint == nil) then
+        Alarm("InverseKin for partition standby failed!", ErrorMessage.Type.PointErr)
+    end
+
+    return StandyJoint
+end
+
+---------------------------------------------------------------
+
+---
 --待机位置运动
 local function StandyMotion(PalletNumber, CPoint)
     if (PalletNumber.State.StateReady == false) and (LiftingHeight > 1) then
-        MovJ(CPoint.Paras.Standy, { a = NLDAcc, v = NLDVel, cp = 100 })
+        SafeMovL(CPoint.Paras.Standy, { a = NLDAcc, v = NLDVel, cp = 100 }, false)
         AdjustLiftingHeight(Home)
         SyncMotion(Home)
     elseif (CPoint.Paras.Mode == MotionType.Part) then
-        local Standy = { pose = {} }
-        Standy.pose = DeepCopy(CPoint.Paras.Standy.pose)
-        Standy.pose[3] = Standy.pose[3] - CPoint.Paras.LH
-        MovJ(Standy, { a = NLDAcc, v = NLDVel, cp = 100 })
+        -- 隔板回standby：优先使用src3提供的standby joint，保证与backward transition的终点J6一致
+        if (CPoint.StandyMotionPoint ~= nil) and (CPoint.StandyMotionPoint.joint ~= nil) then
+            SafeMovJ(CPoint.StandyMotionPoint, { a = NLDAcc, v = NLDVel, cp = 100 }, true)
+        else
+            SafeMovJ(GetPartitionStandbyJoint(CPoint), { a = NLDAcc, v = NLDVel, cp = 100 }, true)
+        end
     else
-        MovJ(CPoint.MotionPoint[7], { a = NLDAcc, v = NLDVel, cp = 100 })
+        SafeMovL(CPoint.MotionPoint[7], { a = NLDAcc, v = NLDVel, cp = 100 }, false)
     end
+end
+---------------------------------------------------------------
+--隔板放置后先回安全点，避免直接回standby时J1转到操作员侧危险区域
+local function PartitionGoSafePoint(CPoint, UseGlobalPartSafePoint, KeepCurrentJ6)
+    local SafePoint = nil
+
+    if (UseGlobalPartSafePoint ~= true)
+        and (CPoint.MotionPoint[7] ~= nil)
+        and (CPoint.MotionPoint[7].joint ~= nil) then
+        --隔板运动自身/下一笔隔板动作：优先使用src3计算出来的MotionPoint[7]隔板安全点
+        SafePoint = DeepCopy(CPoint.MotionPoint[7])
+    else
+        --兜底才使用全局隔板安全点PartSafePoint
+        SafePoint = DeepCopy(PartSafePoint)
+    end
+
+    --默认保持当前J6，避免刚离开放置点就发生腕部旋转。
+    --但普通箱子最后一箱后准备进入隔板时，需要直接去“下一笔隔板安全点”的完整joint，
+    --这样下一笔隔板动作不会在安全点再额外转一次J6。
+    if KeepCurrentJ6 ~= false then
+        local CurrentJoint = GetAngle().joint
+        if (SafePoint.joint ~= nil) and (CurrentJoint ~= nil) then
+            SafePoint.joint[6] = CurrentJoint[6]
+        end
+    end
+
+    SafeMovJ(SafePoint, { a = NLDAcc, v = NLDVel, cp = 100 }, true)
+end
+
+--获取队列里的下一笔隔板动作；用于普通箱子最后一箱后直接去下一笔隔板安全点
+local function GetNextPartitionMotion(CQueue)
+    if (CQueue == nil) or (CQueue:IsEmpty() == true) then
+        return nil
+    end
+
+    local NextPoint = CQueue:Peek()
+    if (NextPoint ~= nil)
+        and (NextPoint.Paras ~= nil)
+        and (NextPoint.Paras.Mode == MotionType.Part) then
+        return NextPoint
+    end
+
+    return nil
+end
+---------------------------------------------------------------
+--隔板余量传感器检测：放置隔板后检测料仓是否还有隔板
+--DI = ON/1：认为料仓有隔板，恢复默认隔板数量，并写入Modbus/SetVal
+--DI = OFF/0：认为料仓无隔板，将剩余隔板数量置为0，并写入Modbus/SetVal
+local function CheckPartitionRemainSensor(PalletNumber, CPoint)
+    if (CPoint == nil) or (CPoint.Paras == nil) then
+        return
+    end
+
+    if (CPoint.Paras.Mode ~= MotionType.Part) or (PalletNumber.Mode ~= WorkType.Pallet) then
+        return
+    end
+
+    if (PartSensorCfg == nil) or (PartSensorCfg.Enable ~= true) then
+        return
+    end
+
+    if (PartSensorCfg.Port == nil) or (PartSensorCfg.Port.A == nil) then
+        LogWarn("Partition remain sensor DI is not configured!")
+        return
+    end
+
+    if SimulateMode == 1 then
+        return
+    end
+
+    local DelayTime = PartSensorCfg.DelayTime or 0
+    local SensorState = CheckDIRes(PartSensorCfg.Port.Mode, PartSensorCfg.Port.A)
+
+    if DelayTime > 0 then
+        Wait(DelayTime)
+        SensorState = CheckDIRes(PartSensorCfg.Port.Mode, PartSensorCfg.Port.A)
+    end
+
+    if SensorState == ON then
+        PalletNumber.Partition.RePartNum = PalletNumber.ProcessNum.PartitionNum
+        WritePartNum(PalletNumber)
+        LogInfo("Partition remain sensor DI%s is ON. Restore remaining partition number to default and write Modbus: %s.",
+            tostring(PartSensorCfg.Port.A), tostring(PalletNumber.Partition.RePartNum))
+    else
+        PalletNumber.Partition.RePartNum = 0
+        WritePartNum(PalletNumber)
+        LogWarn("Partition remain sensor DI%s is OFF. Set remaining partition number to 0 and write Modbus.",
+            tostring(PartSensorCfg.Port.A))
+    end
+end
+---------------------------------------------------------------
+--隔板动作开始前检测：如果传感器已经确认无隔板，则不再继续执行取隔板动作
+local function CheckPartitionRemainBeforeMotion(PalletNumber, CPoint)
+    if (CPoint == nil) or (CPoint.Paras == nil) then
+        return true
+    end
+
+    if (CPoint.Paras.Mode ~= MotionType.Part) or (PalletNumber.Mode ~= WorkType.Pallet) then
+        return true
+    end
+
+    if (PartSensorCfg == nil) or (PartSensorCfg.Enable ~= true) then
+        return true
+    end
+
+    if (PartSensorCfg.Port == nil) or (PartSensorCfg.Port.A == nil) then
+        LogWarn("Partition remain sensor DI is not configured!")
+        return true
+    end
+
+    if SimulateMode == 1 then
+        return true
+    end
+
+    local DelayTime = PartSensorCfg.DelayTime or 0
+    local SensorState = CheckDIRes(PartSensorCfg.Port.Mode, PartSensorCfg.Port.A)
+
+    if DelayTime > 0 then
+        Wait(DelayTime)
+        SensorState = CheckDIRes(PartSensorCfg.Port.Mode, PartSensorCfg.Port.A)
+    end
+
+    if SensorState == OFF then
+        PalletNumber.Partition.RePartNum = 0
+        WritePartNum(PalletNumber)
+        LogWarn("Partition remain sensor DI%s is OFF before partition motion. Set remaining partition number to 0.",
+            tostring(PartSensorCfg.Port.A))
+        Alarm("Partition is empty!", ErrorMessage.Type.PartErr)
+        return false
+    end
+
+    -- 当前传感器检测到有隔板时，强制恢复默认数量，并写入Modbus/SetVal。
+    -- 这样即使之前被写成0，补充隔板后也能恢复显示值。
+    if PalletNumber.Partition.RePartNum ~= PalletNumber.ProcessNum.PartitionNum then
+        PalletNumber.Partition.RePartNum = PalletNumber.ProcessNum.PartitionNum
+        WritePartNum(PalletNumber)
+        LogInfo("Partition remain sensor DI%s is ON before partition motion. Restore remaining partition number to default and write Modbus: %s.",
+            tostring(PartSensorCfg.Port.A), tostring(PalletNumber.Partition.RePartNum))
+    end
+
+    return true
 end
 ---------------------------------------------------------------
 --更新隔板数据
 local function UpdatePartData(PalletNumber, CPoint)
     if (CPoint.Paras.Mode == MotionType.Part) then
+        -- 使用隔板余量传感器时，隔板数量不再由动作次数维护。
+        -- 放置后的数量更新只由 CheckPartitionRemainSensor() 负责：
+        -- DI=ON 恢复默认数量，DI=OFF 将 RePartNum 写为0。
+        if (PalletNumber.Mode == WorkType.Pallet)
+            and (PartSensorCfg ~= nil)
+            and (PartSensorCfg.Enable == true) then
+            return
+        end
+
         if (PalletNumber.Mode == WorkType.Pallet) then
             if (PalletNumber.Partition.RePartNum <= 0) then
                 -- 仿真模式，不需要隔板数量报警
@@ -1464,6 +1869,14 @@ local function UpdateData(PalletNumber, CPoint)
 
     end
     if (CPoint.Paras.Mode == MotionType.Part) then
+        -- 使用隔板余量传感器时，放置隔板后不再按动作次数修改 RePartNum。
+        -- RePartNum 只由传感器决定：DI=ON恢复默认值，DI=OFF写0。
+        if (PartSensorCfg ~= nil) and (PartSensorCfg.Enable == true)
+            and (PalletNumber.Mode == WorkType.Pallet) then
+            return
+        end
+
+        -- 非传感器模式保留原有计数逻辑，避免影响未启用隔板传感器的项目。
         if (PalletNumber.Mode == WorkType.Pallet) then
             PalletNumber.Partition.RePartNum = PalletNumber.Partition.RePartNum - 1
         else
@@ -1473,43 +1886,66 @@ local function UpdateData(PalletNumber, CPoint)
     end
 end
 ---------------------------------------------------------------
+--根据栈板类型调整隔板点位（右栈板需要在0用户坐标系下向X方向平移1000mm）
+local function GetAdjustedPartitionPoint(PalletNumber, BasePoint)
+    local AdjustedPoint = DeepCopy(BasePoint)
+    if PalletNumber.Pallet == 1 then
+        AdjustedPoint.pose[1] = AdjustedPoint.pose[1] - 1000
+    end
+    return AdjustedPoint
+end
+---------------------------------------------------------------
 --MotionPoint[index]:
 --1~5:过渡点（示教），6:取料（示教），7：取料上方点（自动生成），8~11：放置点（自动生成）
 --12~15：放料上方点（自动生成），16~19：放料偏移点（自动生成）
 ---------------------------------------------------------------
 --执行点位运动
-local function PTPMotion(PalletNumber, CPoint)
+local function PTPMotion(PalletNumber, CPoint, CQueue)
     local CPose = { pose = {} }
     -- 仅用于隔板功能的慢抬升参数
-    local PartSlowLiftHeight = 12
-    local PartSlowLiftAcc = 15
-    local PartSlowLiftVel = 8
+    local PartSlowLiftHeight = 200
+    local PartSlowLiftAcc = 10
+    local PartSlowLiftVel = 10
+    -- 隔板放置完成后，先垂直抬升100mm，再走回程过渡点
+    local PartPlaceLiftHeight = 100
 
     if (PalletNumber.Mode == WorkType.Pallet) then
         Wait(Time.Pick.Pre)
         if (CPoint.Paras.Mode == MotionType.Part) then
+            if CheckPartitionRemainBeforeMotion(PalletNumber, CPoint) == false then
+                return
+            end
+
             local CPartPick = DeepCopy(PartPick)
             CPartPick.pose[3] = CPartPick.pose[3] - CPoint.Paras.LH +
                 PalletNumber.ProcessNum.PartitionHeight * PalletNumber.Partition.RePartNum
-            MovJ(CPoint.MotionPoint[7], { a = NLDAcc, v = SyncMotionVel, cp = 100 })
+            SafeMovJ(CPoint.MotionPoint[7], { a = NLDAcc, v = SyncMotionVel, cp = 100 }, true)
             SyncMotion(CPoint.Paras.LH)
-            MovL(CPartPick, { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到抓取点
+
+            local CPartPickLift = DeepCopy(CPartPick)
+            CPartPickLift.pose[3] = CPartPickLift.pose[3] + PartSlowLiftHeight
+            MovL(CPartPickLift, { a = NLDAcc, v = NLDVel, cp = 0 })
+
+            MovL(CPartPick, {a = 53, v = 20, stopcond = "AI(1) <= 1.5"}) --运动到抓取点
+
+            --MovL(CPartPick, { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到抓取点
+
             OpenSucker(PalletNumber, CPoint)
+
             if SimulateMode == 1 then
                 UpdatePickBoxState(PalletNumber, CPoint)
             end
 
-            -- 取到隔板后：先慢速抬升 12 mm，再恢复原来的速度回上方点
+            -- 取到隔板后：先慢速抬升 200 mm，再恢复原来的速度回上方点
             local CPartPickLift = DeepCopy(CPartPick)
             CPartPickLift.pose[3] = CPartPickLift.pose[3] + PartSlowLiftHeight
             MovL(CPartPickLift, { a = PartSlowLiftAcc, v = PartSlowLiftVel, cp = 0 })
 
-            MovL(CPoint.MotionPoint[7], { a = LDAcc, v = LDVel, cp = 100 }) --运动到抓取点上方
         else
             if ((SingleMotion == false) or (SyncSignal == true)
                     or (StateMachine == FSMType.DLR and PalletNumber.Pallet ~= PrePallet)) then
                 SingleMotion = true
-                MovJ(CPoint.MotionPoint[7], { a = NLDAcc, v = SyncMotionVel, cp = 100 })
+                SafeMovJ(CPoint.MotionPoint[7], { a = NLDAcc, v = SyncMotionVel, cp = 100 }, true)
                 SyncMotion(CPoint.Paras.LH)
             end
             MovL(CPoint.MotionPoint[6], { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到抓取点
@@ -1522,38 +1958,89 @@ local function PTPMotion(PalletNumber, CPoint)
         Wait(Time.Pick.Post)
         TransMotion(CPoint, Dir.Forward, LDAcc, LDVel)
         for i = 1, CPoint.Paras.Times do
-            if CPoint.Paras.OffSet[i] == 1 then
-                MovL(CPoint.MotionPoint[15 + i], { a = LDAcc, v = LDVel, cp = 100 })         --运动到放置过渡点
-                MovL(CPoint.MotionPoint[11 + i], { a = PlaceAcc, v = PlaceSpeed, cp = 100 }) --运动到放置点正上方
+            if CPoint.Paras.Mode == MotionType.Part then
+                -- 隔板：执行完最后一个过渡点后，直接MovL滑到放置点，不再经过[12]/[16]上方点
+                MovL(CPoint.MotionPoint[7 + i], { a = PlaceAcc, v = PlaceSpeed, cp = 0 })
+                CloseSucker(PalletNumber, CPoint, i)
+                if SimulateMode == 1 then
+                    UpdatePlaceBoxState(PalletNumber, CPoint)
+                end
+
+                -- 隔板放好后，先从当前放置点垂直抬升100mm，再进入回程过渡点
+                local PartPlaceLift = GetPose()
+                if (PartPlaceLift ~= nil) and (PartPlaceLift.pose ~= nil) then
+                    PartPlaceLift.pose[3] = PartPlaceLift.pose[3] + PartPlaceLiftHeight
+                    MovL(PartPlaceLift, { a = NLDAcc, v = NLDVel, cp = 0 })
+                end
+
+                UpdateData(PalletNumber, CPoint)
+                CheckPartitionRemainSensor(PalletNumber, CPoint)
             else
-                MovL(CPoint.MotionPoint[11 + i], { a = LDAcc, v = LDVel, cp = 100 })         --运动到放置点正上方
-            end
-            MovL(CPoint.MotionPoint[7 + i], { a = PlaceAcc, v = PlaceSpeed, cp = 100 })
-            CloseSucker(PalletNumber, CPoint, i)
-            if SimulateMode == 1 then
-                UpdatePlaceBoxState(PalletNumber, CPoint)
-            end
-            if (CPoint.Paras.Mode == MotionType.Part) then
-                -- 放下隔板后：基于当前位置慢速抬升 12 mm，再恢复原来的返回逻辑
-                local liftPoint = GetPose()
-                liftPoint.pose[3] = liftPoint.pose[3] + PartSlowLiftHeight
-                MovL(liftPoint, { a = PartSlowLiftAcc, v = PartSlowLiftVel, cp = 0 })
+                if CPoint.Paras.OffSet[i] == 1 then
+                    MovL(CPoint.MotionPoint[15 + i], { a = LDAcc, v = LDVel, cp = 100 })         --运动到放置过渡点
+                    MovL(CPoint.MotionPoint[11 + i], { a = PlaceAcc, v = PlaceSpeed, cp = 100 }) --运动到放置点正上方
+                else
+                    MovL(CPoint.MotionPoint[11 + i], { a = LDAcc, v = LDVel, cp = 100 })         --运动到放置点正上方
+                end
+                MovL(CPoint.MotionPoint[7 + i], { a = PlaceAcc, v = PlaceSpeed, cp = 100 })
+                CloseSucker(PalletNumber, CPoint, i)
+                if SimulateMode == 1 then
+                    UpdatePlaceBoxState(PalletNumber, CPoint)
+                end
+
+                UpdateData(PalletNumber, CPoint)
+
+                MovL(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
+
+                local DepositLiftHeight = 250
+
+                if i < CPoint.Paras.Times then
+                    -- 还有下一个 box
+                    -- 在当前 arrival point 基础上再抬高 80 mm
+
+                    local currentJoint = { joint = GetAngle().joint }
+
+                    local liftPoint = PositiveKin(currentJoint,
+                        { user = PalletNumber.Coordinate.UserNum, tool = PalletNumber.Coordinate.ToolNum })
+
+                    liftPoint.pose[3] = liftPoint.pose[3] + DepositLiftHeight
+
+                    local errId, liftJointPoint = InverseKin(liftPoint,
+                        { user = PalletNumber.Coordinate.UserNum, tool = PalletNumber.Coordinate.ToolNum })
+
+                    if (errId ~= 0) or (liftJointPoint == nil) then
+                        Alarm("InverseKin for deposit lift failed!", ErrorMessage.Type.PointErr)
+                    end
+
+                    MovL(liftJointPoint, { a = NLDAcc, v = NLDVel, cp = 0 })
+                end
+
+                if CPoint.Paras.OffSet[i] == 1 then
+                    MovL(CPoint.MotionPoint[15 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
+                end
             end
 
-            -- 以下返回逻辑保持原版风格，不改普通功能
-            UpdateData(PalletNumber, CPoint)
-            if (CPoint.Paras.Times ~= 1) then
-                MovL(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 })     --运动到放置点正上方
-                if CPoint.Paras.OffSet[i] == 1 then
-                    MovL(CPoint.MotionPoint[15 + i], { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到放置过渡点
-                end
-            else
-                MovL(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到放置点正上方
+        end
+        local SkipStandby = false
+        if CPoint.Paras.Mode == MotionType.Part then
+            --隔板：放置后先走backward transition离开放置区域，再去安全点，最后回standby
+            TransMotion(CPoint, Dir.Backward, NLDAcc, NLDVel)
+            PartitionGoSafePoint(CPoint)
+        else
+            TransMotion(CPoint, Dir.Backward, NLDAcc, NLDVel)
+
+            --普通箱子：如果当前是每层最后一个box，下一笔队列就是隔板动作，
+            --则不要再回取货standby，直接去下一笔隔板动作的安全点，随后进入隔板逻辑
+            local NextPartPoint = GetNextPartitionMotion(CQueue)
+            if NextPartPoint ~= nil then
+                PartitionGoSafePoint(NextPartPoint, false, false)
+                SkipStandby = true
             end
         end
-        TransMotion(CPoint, Dir.Backward, NLDAcc, NLDVel)
         CPose = GetPose()
-        StandyMotion(PalletNumber, CPoint)
+        if SkipStandby == false then
+            StandyMotion(PalletNumber, CPoint)
+        end
     else
         if (SingleMotion == false) or (SyncSignal == true)
             or (StateMachine == FSMType.DLR and PalletNumber.Pallet ~= PrePallet) then
@@ -1563,7 +2050,7 @@ local function PTPMotion(PalletNumber, CPoint)
                 local Standy = { pose = {} }
                 Standy.pose = DeepCopy(CPoint.Paras.Standy.pose)
                 Standy.pose[3] = Standy.pose[3] - CPoint.Paras.LH
-                MovJ(Standy, { a = NLDAcc, v = SyncMotionVel, cp = 100 })
+                SafeMovJ(Standy, { a = NLDAcc, v = SyncMotionVel, cp = 100 }, true)
             end
             SyncMotion(CPoint.Paras.LH)
         end
@@ -1586,9 +2073,9 @@ local function PTPMotion(PalletNumber, CPoint)
         end
         TransMotion(CPoint, Dir.Backward, LDAcc, LDVel)
         CPose = GetPose()
-        MovJ(CPoint.MotionPoint[7], { a = LDAcc, v = LDVel, cp = 100 })
+        SafeMovJ(CPoint.MotionPoint[7], { a = LDAcc, v = LDVel, cp = 100 }, true)
         if (CPoint.Paras.Mode == MotionType.Part) then
-            local CPartPick = DeepCopy(PartPick)
+            local CPartPick = GetAdjustedPartitionPoint(PalletNumber, PartPick)
             CPartPick.pose[3] = CPartPick.pose[3] - CPoint.Paras.LH +
                 PalletNumber.ProcessNum.PartitionHeight * PalletNumber.Partition.RePartNum
             MovL(CPartPick, { a = NLDAcc, v = NLDVel, cp = 100 })           --运动到抓取点
@@ -1600,7 +2087,7 @@ local function PTPMotion(PalletNumber, CPoint)
             UpdatePlaceBoxState(PalletNumber, CPoint)
         end
         if (CPoint.Paras.Mode == MotionType.Part) then
-            MovJ(CPoint.MotionPoint[7], { a = LDAcc, v = LDVel, cp = 100 })
+            SafeMovJ(CPoint.MotionPoint[7], { a = LDAcc, v = LDVel, cp = 100 }, true)
         end
         StandyMotion(PalletNumber, CPoint)
     end
@@ -1614,6 +2101,10 @@ local function PreMotion(PalletNumber, CQueue)
     local CPoint = CQueue:Pop()
     if (CPoint == nil) then
         Alarm("PreMotion Point Error!", ErrorMessage.Type.PointErr)
+    end
+    if (CPoint.Paras ~= nil) and (CPoint.Paras.Mode == MotionType.Part) then
+        -- 进入隔板动作前再次同步，保证在隔板不足ACK/报警前已经刷新Modbus数量。
+        SyncPartitionRemainBySensor(PalletNumber, true)
     end
     if (CPoint.Paras.ErrIndex > 0) then
         GetPointInfo(PalletNumber, CPoint)
@@ -1641,7 +2132,7 @@ local function ExecuteMotion(PalletNumber, CQueue)
                     or ((PalletNumber.State.StateReady == true) and (SignalReady == true) and (FilmDone == true)) then
                     LogInfo("%s pallet is working!", (Pallet == Left) and "Left" or "Right")
                     SignalReady = false
-                    PTPMotion(PalletNumber, CPoint)
+                    PTPMotion(PalletNumber, CPoint, CQueue)
                     if (SignalReady == false) then
                         MotionDone = true
                     end
@@ -1701,6 +2192,8 @@ end
 --主程序
 InitStorageMode()
 InitModbus()
+-- 必须在InitFSM/ACK/隔板不足判断前同步，否则界面和报警逻辑仍可能读取到旧的0。
+SyncAllPartitionRemainBySensor(true)
 InitFSM()
 InitPallet()
 while true do

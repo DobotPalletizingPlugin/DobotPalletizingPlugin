@@ -21,6 +21,97 @@ local function GetSignal(PalletNumber)
 end
 
 ----------------------------------------------------------------
+--BIB项目专用输送线控制使能判断
+--注意：必须严格匹配PalletName，避免影响其它码垛项目
+local function IsBIBConveyorEnabled()
+    if (BIBConveyorCfg == nil) then
+        return false
+    end
+
+    if (BIBConveyorCfg.Enable ~= true) then
+        return false
+    end
+
+    if (PalletName == "BIB_2x10L")
+        or (PalletName == "BIB_6x3L")
+        or (PalletName == "BIB_2X5L") then
+        return true
+    end
+
+    return false
+end
+
+----------------------------------------------------------------
+--BIB项目专用输送线控制
+--两个实体cartons在本项目中作为一个逻辑box：B1+B2稳定后才授权机器人取一次
+local function HandleBIBConveyorControl(PalletNumber, State)
+    if (IsBIBConveyorEnabled() ~= true) then
+        return false
+    end
+
+    --只在码垛模式启用输送线控制；拆垛或其它模式继续走原插件逻辑
+    if (PalletNumber.Mode ~= WorkType.Pallet) then
+        return false
+    end
+
+    if (BIBConveyorCfg.Sensor == nil) or (BIBConveyorCfg.Motor == nil) then
+        LogWarn("BIB conveyor configuration is incomplete!")
+        return false
+    end
+
+    local B1Port = BIBConveyorCfg.Sensor.B1
+    local B2Port = BIBConveyorCfg.Sensor.B2
+    local B3Port = BIBConveyorCfg.Sensor.B3
+    local M1Port = BIBConveyorCfg.Motor.M1
+    local M2Port = BIBConveyorCfg.Motor.M2
+
+    if (B1Port == nil) or (B2Port == nil) or (B3Port == nil)
+        or (M1Port == nil) or (M2Port == nil) then
+        LogWarn("BIB conveyor DI/DO port is not configured!")
+        return false
+    end
+
+    local DelayTime = BIBConveyorCfg.DelayTime or 1000
+    local B1 = CheckDIRes(B1Port.Mode, B1Port.A)
+    local B2 = CheckDIRes(B2Port.Mode, B2Port.A)
+    local B3 = CheckDIRes(B3Port.Mode, B3Port.A)
+
+    --M1：只有B1/B2取料位已满，并且B3检测到第三个carton时才停止
+    if (B1 == ON) and (B2 == ON) and (B3 == ON) then
+        IORes(M1Port.Mode, M1Port.A, OFF)
+    else
+        IORes(M1Port.Mode, M1Port.A, ON)
+    end
+
+    --M2 + robot authorization：B1+B2稳定DelayTime后，认为一个逻辑box到位
+    if (B1 == State) and (B2 == State) then
+        Wait(DelayTime)
+
+        B1 = CheckDIRes(B1Port.Mode, B1Port.A)
+        B2 = CheckDIRes(B2Port.Mode, B2Port.A)
+        B3 = CheckDIRes(B3Port.Mode, B3Port.A)
+
+        --等待后再次更新M1，避免第三个carton在防抖期间进入但M1未及时停止
+        if (B1 == ON) and (B2 == ON) and (B3 == ON) then
+            IORes(M1Port.Mode, M1Port.A, OFF)
+        else
+            IORes(M1Port.Mode, M1Port.A, ON)
+        end
+
+        if (B1 == State) and (B2 == State) then
+            IORes(M2Port.Mode, M2Port.A, OFF)
+            GetSignal(PalletNumber)
+        else
+            IORes(M2Port.Mode, M2Port.A, ON)
+        end
+    else
+        IORes(M2Port.Mode, M2Port.A, ON)
+    end
+
+    return true
+end
+
+----------------------------------------------------------------
 --获取检测模式
 local function GetDeteMode(PalletNumber, State)
     local Num = 0
@@ -119,6 +210,11 @@ local function GetDeteMode(PalletNumber, State)
                 end
             end
         end
+        return
+    end
+
+
+    if (HandleBIBConveyorControl(PalletNumber, State) == true) then
         return
     end
 
