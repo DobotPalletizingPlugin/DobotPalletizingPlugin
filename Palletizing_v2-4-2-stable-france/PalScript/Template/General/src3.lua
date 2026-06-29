@@ -406,10 +406,7 @@ local function GetTransPoint(PalletNumber, CData)
     end
     local PHeight = Point.Pose[6][3] + TeachPointOffHeight
     local THeight = 0
-    if Res.Mode == MotionType.Part then
-        --隔板示教过渡点参考放置点：最后一个过渡点固定为放置点上方200mm
-        THeight = Point.Pose[8][3] + 200
-    else
+    if Res.Mode ~= MotionType.Part then
         --常规箱子过渡点保持原逻辑
         THeight = Point.Pose[8][3] + PalletNumber.OffsetHeight + OffSet[1][3]
     end
@@ -420,7 +417,7 @@ local function GetTransPoint(PalletNumber, CData)
             and (CData.PartTransTeachPose ~= nil)
             and (CData.PartTransTeachPose[i] ~= nil) then
             --隔板示教过渡点：使用由joint+当前User/Tool正解出来的pose。
-            --只在下面调整Z，不改X/Y/Rx/Ry/Rz。
+            --不再强制修改Z，保持客户示教过渡点高度和姿态。
             CopyPoint.pose[i] = DeepCopy(CData.PartTransTeachPose[i])
         end
 
@@ -428,15 +425,7 @@ local function GetTransPoint(PalletNumber, CData)
             CopyPoint.pose[i][6] = Point.Pose[8][6] --常规过渡点与放置姿态一致
         end
 
-        if Res.Mode == MotionType.Part then
-            --隔板最后一个示教过渡点必须贴近放置点，固定为放置点上方200mm
-            --这里不再受CopyPoint.mode[i]限制，也不再用PHeight抬高
-            if i == Res.TransNum then
-                CopyPoint.pose[i][3] = THeight
-            elseif (CopyPoint.mode[i] == 0) and (CopyPoint.pose[i][3] <= THeight) then
-                CopyPoint.pose[i][3] = THeight
-            end
-        else
+        if Res.Mode ~= MotionType.Part then
             if CopyPoint.mode[i] == 0 then
                 if CopyPoint.pose[i][3] <= THeight then
                     CopyPoint.pose[i][3] = THeight
