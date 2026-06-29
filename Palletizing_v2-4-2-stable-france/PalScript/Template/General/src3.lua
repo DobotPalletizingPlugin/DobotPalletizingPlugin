@@ -333,11 +333,7 @@ local function GetTransPoint(PalletNumber)
     local THeight = Point.Pose[8][3] + PalletNumber.OffsetHeight + OffSet[1][3]
 
     for i = 1, Res.TransNum do
-        if (Res.Mode == MotionType.Part) then
-            if (i > Res.TransNum - 2) then
-                CopyPoint.pose[i][6] = Point.Pose[8][6]
-            end
-        else
+        if (Res.Mode ~= MotionType.Part) then
             CopyPoint.pose[i][6] = Point.Pose[8][6] --过渡点与放置姿态一致
         end
 
@@ -397,10 +393,14 @@ end
 --12~15：放料上方点（自动生成），16~19：放料偏移点（自动生成）
 -----------------------------------------------------------------
 --获取点位结果
-local function GetResult(CData)
+local function GetResult(PalletNumber, CData)
     local Ret = { MotionPoint = {}, Paras = {} }
     local ToolNum = 0
     local CJoint = {}
+    local PartPlaceJointValid = 0
+    if (PalletNumber.Partition.Enable == true) then
+        PartPlaceJointValid = CheckTableData(PalletNumber.TeachPoint.TeachPartitionPlacePoint.joint)
+    end
     if (Res.Mode == MotionType.Part) then
         ToolNum = math.abs(PalletSuckerFunction) - 1
     else
@@ -414,9 +414,15 @@ local function GetResult(CData)
     for i = 1, 19 do
         Ret.MotionPoint[i] = { joint = CJoint[i] }
         if (Res.Mode == MotionType.Part) then
-            -- 隔板：只有最后2个过渡点使用放置A点对应的joint6
-            if ((i > Res.TransNum - 2 and i <= Res.TransNum) or i == 12 or i == 16) then
-                Ret.MotionPoint[i].joint[6] = CJoint[8][6]
+            if (i <= Res.TransNum)
+                and (CheckTableData(PalletNumber.TeachPoint.TransPartitionPoint.joint[i]) == 1) then
+                for j = 4, 6 do
+                    Ret.MotionPoint[i].joint[j] = PalletNumber.TeachPoint.TransPartitionPoint.joint[i][j]
+                end
+            elseif (i == 8 or i == 12 or i == 16) and (PartPlaceJointValid == 1) then
+                for j = 4, 6 do
+                    Ret.MotionPoint[i].joint[j] = PalletNumber.TeachPoint.TeachPartitionPlacePoint.joint[j]
+                end
             end
         else
             -- 普通箱子：保持原先逻辑，1~5过渡点都使用放置A点对应的joint6
@@ -459,7 +465,7 @@ local function GetPoint(PalletNumber, CData)
     LogDebug("Trans point calculation completed at %f", os.clock())
     GetInterPoint(PalletNumber)
     LogDebug("Inter point calculation completed at %f", os.clock())
-    CPoint = GetResult(CData)
+    CPoint = GetResult(PalletNumber, CData)
     return CPoint
 end
 ----------------------------------------------------------------

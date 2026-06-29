@@ -1368,7 +1368,9 @@ local function TransMotion(CPoint, CDir, Acc, Vel)
     end
     for i = SD, ED, CDir do
         if (type(CPoint.MotionPoint[i]) == "table") then
-            if (PalletObstacleFunc == 1) then
+            if (CPoint.Paras.Mode == MotionType.Part) then
+                MovJ(CPoint.MotionPoint[i], { a = Acc, v = Vel, cp = 100 }) --隔板过渡点保持示教J4/J5/J6
+            elseif (PalletObstacleFunc == 1) then
                 MovL(CPoint.MotionPoint[i], { a = Acc, v = Vel, cp = 100 }) --运动到层过渡点
             else
                 if (CDir == Dir.Backward) then
@@ -1519,37 +1521,10 @@ local function PTPMotion(PalletNumber, CPoint)
     local DepositLiftHeight = 250
 
     if (PalletNumber.Mode == WorkType.Pallet) then
-        ----------------------------------------------------------------
-        -- WorkType.Pallet:
-        --   当前流程是码垛流程：
-        --   从输送线 / 取料点抓箱子，然后放到托盘上。
-        ----------------------------------------------------------------
 
         Wait(Time.Pick.Pre)
 
         if (CPoint.Paras.Mode == MotionType.Part) then
-            ----------------------------------------------------------------
-            -- MotionType.Part:
-            --   当前 CPoint 是隔板动作，不是普通箱子动作。
-            --
-            -- 点位说明：
-            --   MotionPoint[7]：隔板取料上方点 / standby 上方点
-            --   CPartPick：实际隔板取料点，根据剩余隔板数量动态计算高度
-            --
-            -- 速度说明：
-            --   到隔板取料上方点：NLDAcc / SyncMotionVel
-            --     因为此时未吸隔板，属于空载或同步升降运动。
-            --
-            --   下去取隔板：NLDAcc / NLDVel
-            --     因为还未吸到隔板，仍然为空载。
-            --
-            --   吸到隔板后慢速抬升：PartSlowLiftAcc / PartSlowLiftVel
-            --     目的是避免带起相邻隔板。
-            --
-            --   吸到隔板后回上方点：LDAcc / LDVel
-            --     因为此时已经带着隔板，按带料速度运行。
-            ----------------------------------------------------------------
-
             local CPartPick = DeepCopy(PartPick)
             CPartPick.pose[3] = CPartPick.pose[3] - CPoint.Paras.LH +
                 PalletNumber.ProcessNum.PartitionHeight * PalletNumber.Partition.RePartNum
@@ -1571,35 +1546,6 @@ local function PTPMotion(PalletNumber, CPoint)
             MovL(CPoint.MotionPoint[7], { a = LDAcc, v = LDVel, cp = 100 })
 
         else
-            ----------------------------------------------------------------
-            -- MotionType.Norm:
-            --   当前 CPoint 是普通箱子动作。
-            --
-            -- 点位说明：
-            --   MotionPoint[6]：箱子取料点
-            --   MotionPoint[7]：箱子取料上方点
-            --
-            -- if 条件说明：
-            --   SingleMotion == false:
-            --     当前循环第一次进入取料侧，需要先移动到取料上方点。
-            --
-            --   SyncSignal == true:
-            --     升降柱高度发生变化，需要同步等待升降柱动作。
-            --
-            --   StateMachine == FSMType.DLR and PalletNumber.Pallet ~= PrePallet:
-            --     双输送线双托盘模式下，当前托盘和上一次托盘不同，
-            --     说明左右托盘切换了，需要重新移动到当前托盘对应的取料上方点。
-            --
-            -- 速度说明：
-            --   到取料上方点：NLDAcc / SyncMotionVel
-            --     因为此时还没有抓箱子，同时可能要配合升降柱。
-            --
-            --   下去取箱子：NLDAcc / NLDVel
-            --     因为下去之前还是空载。
-            --
-            --   抓箱后回取料上方点：LDAcc / LDVel
-            --     因为此时已经带着箱子。
-            ----------------------------------------------------------------
 
             if ((SingleMotion == false) or (SyncSignal == true)
                     or (StateMachine == FSMType.DLR and PalletNumber.Pallet ~= PrePallet)) then
@@ -1620,22 +1566,6 @@ local function PTPMotion(PalletNumber, CPoint)
 
         Wait(Time.Pick.Post)
 
-        ----------------------------------------------------------------
-        -- TransMotion Forward:
-        --   从取料侧移动到放料侧的过渡点运动。
-        --
-        -- 点位说明：
-        --   MotionPoint[1] ~ MotionPoint[5]：
-        --     用户示教的过渡点。
-        --
-        -- 方向说明：
-        --   Dir.Forward:
-        --     从取料侧到放料侧，按照 1 -> 5 顺序走过渡点。
-        --
-        -- 速度说明：
-        --   此时机器人已经抓到箱子 / 隔板，
-        --   所以使用 LDAcc / LDVel。
-        ----------------------------------------------------------------
         TransMotion(CPoint, Dir.Forward, LDAcc, LDVel)
 
         for i = 1, CPoint.Paras.Times do
@@ -1653,82 +1583,14 @@ local function PTPMotion(PalletNumber, CPoint)
             ----------------------------------------------------------------
 
             if CPoint.Paras.OffSet[i] == 1 then
-                ----------------------------------------------------------------
-                -- OffSet[i] == 1:
-                --   当前第 i 个箱子需要使用放置 offset 过渡点。
-                --
-                -- 点位说明：
-                --   MotionPoint[15 + i]：
-                --     第 i 个箱子的放置 offset 过渡点。
-                --     例如：
-                --       i = 1 -> MotionPoint[16]
-                --       i = 2 -> MotionPoint[17]
-                --       i = 3 -> MotionPoint[18]
-                --       i = 4 -> MotionPoint[19]
-                --
-                --   MotionPoint[11 + i]：
-                --     第 i 个箱子的放置上方点。
-                --     例如：
-                --       i = 1 -> MotionPoint[12]
-                --       i = 2 -> MotionPoint[13]
-                --       i = 3 -> MotionPoint[14]
-                --       i = 4 -> MotionPoint[15]
-                --
-                -- 速度说明：
-                --   到 offset 过渡点：LDAcc / LDVel
-                --     因为此时机器人还带着箱子。
-                --
-                --   从 offset 过渡点到放置上方点：PlaceAcc / PlaceSpeed
-                --     因为已经接近码垛放置区域，需要使用放置速度。
-                ----------------------------------------------------------------
-
                 MovL(CPoint.MotionPoint[15 + i], { a = LDAcc, v = LDVel, cp = 100 })
                 MovL(CPoint.MotionPoint[11 + i], { a = PlaceAcc, v = PlaceSpeed, cp = 100 })
-
             else
-                ----------------------------------------------------------------
-                -- OffSet[i] ~= 1:
-                --   当前第 i 个箱子不需要 offset 过渡点，
-                --   直接移动到第 i 个箱子的放置上方点。
-                --
-                -- 点位说明：
-                --   MotionPoint[11 + i]：
-                --     第 i 个箱子的放置上方点。
-                --
-                -- 速度说明：
-                --   此时机器人仍然带着箱子，
-                --   所以使用 LDAcc / LDVel。
-                ----------------------------------------------------------------
-
                 MovL(CPoint.MotionPoint[11 + i], { a = LDAcc, v = LDVel, cp = 100 })
             end
 
-            ----------------------------------------------------------------
-            -- 下放到实际放置点
-            --
-            -- 点位说明：
-            --   MotionPoint[7 + i]：
-            --     第 i 个箱子的实际放置点。
-            --     例如：
-            --       i = 1 -> MotionPoint[8]
-            --       i = 2 -> MotionPoint[9]
-            --       i = 3 -> MotionPoint[10]
-            --       i = 4 -> MotionPoint[11]
-            --
-            -- 速度说明：
-            --   放置动作使用 PlaceAcc / PlaceSpeed。
-            ----------------------------------------------------------------
             MovL(CPoint.MotionPoint[7 + i], { a = PlaceAcc, v = PlaceSpeed, cp = 100 })
 
-            ----------------------------------------------------------------
-            -- 放下当前第 i 个箱子
-            --
-            -- 对于双吸单放：
-            --   i = 1 时，只关闭第一个吸盘，机器人上还带着第二个箱子。
-            --   i = 2 时，关闭第二个吸盘，机器人空载。
-            --
-            -- CloseSucker 内部会根据 i 控制对应吸盘。
-            ----------------------------------------------------------------
             CloseSucker(PalletNumber, CPoint, i)
 
             if SimulateMode == 1 then
@@ -1738,59 +1600,8 @@ local function PTPMotion(PalletNumber, CPoint)
             UpdateData(PalletNumber, CPoint)
 
             if i < CPoint.Paras.Times then
-                ----------------------------------------------------------------
-                -- i < CPoint.Paras.Times:
-                --   当前箱子不是最后一个箱子。
-                --
-                -- 具体含义：
-                --   机器人刚放完第 i 个箱子，
-                --   但是后面还有第 i+1 个箱子没有放。
-                --
-                -- 例如双吸单放：
-                --   Times = 2
-                --   i = 1 时满足 i < Times
-                --   说明第一个箱子已经放下，
-                --   但机器人仍然带着第二个箱子。
-                --
-                -- 速度原则：
-                --   只要机器人上还带着箱子，
-                --   后续返回、抬升、offset 运动都必须使用 LDAcc / LDVel。
-                ----------------------------------------------------------------
-
-                ----------------------------------------------------------------
-                -- 第一步：从实际放置点回到当前箱子的放置上方点
-                --
-                -- 点位说明：
-                --   MotionPoint[11 + i]：
-                --     当前第 i 个箱子的放置上方点。
-                --
-                -- 速度说明：
-                --   机器人仍然带着后续箱子，
-                --   所以使用 LDAcc / LDVel。
-                ----------------------------------------------------------------
                 MovL(CPoint.MotionPoint[11 + i], { a = LDAcc, v = LDVel, cp = 100 })
 
-                ----------------------------------------------------------------
-                -- 第二步：基于当前位置额外抬高 250 mm
-                --
-                -- 逻辑说明：
-                --   先读取当前关节角 GetAngle().joint；
-                --   再用 PositiveKin 转换成当前 TCP 位姿；
-                --   然后把 pose[3]，也就是 Z 高度，加上 DepositLiftHeight；
-                --   最后用 InverseKin 转回关节点，并用 MovL 直线运动过去。
-                --
-                -- 坐标系说明：
-                --   这里使用 PalletNumber.Coordinate.UserNum，
-                --   也就是当前托盘用户坐标系。
-                --
-                -- 目的：
-                --   放完第 i 个箱子后，机器人还带着第 i+1 个箱子。
-                --   直接横移到下一个放置点可能刮碰已经放好的箱子。
-                --   所以先抬高 250 mm，再进入后续路径。
-                --
-                -- 速度说明：
-                --   仍然带箱，所以使用 LDAcc / LDVel。
-                ----------------------------------------------------------------
                 local currentJoint = { joint = GetAngle().joint }
 
                 local liftPoint = PositiveKin(currentJoint,
@@ -1808,92 +1619,24 @@ local function PTPMotion(PalletNumber, CPoint)
                 MovL(liftJointPoint, { a = LDAcc, v = LDVel, cp = 0 })
 
                 if CPoint.Paras.OffSet[i] == 1 then
-                    ----------------------------------------------------------------
-                    -- 如果当前第 i 个箱子使用了 offset 过渡点，
-                    -- 那么抬高后再返回当前箱子的 offset 过渡点。
-                    --
-                    -- 点位说明：
-                    --   MotionPoint[15 + i]：
-                    --     当前第 i 个箱子的放置 offset 过渡点。
-                    --
-                    -- 速度说明：
-                    --   虽然第 i 个箱子已经放下，
-                    --   但机器人还带着第 i+1 个箱子，
-                    --   所以这里仍然使用 LDAcc / LDVel。
-                    ----------------------------------------------------------------
                     MovL(CPoint.MotionPoint[15 + i], { a = LDAcc, v = LDVel, cp = 100 })
                 end
 
             else
-                ----------------------------------------------------------------
-                -- i >= CPoint.Paras.Times:
-                --   当前箱子是最后一个箱子。
-                --
-                -- 具体含义：
-                --   当前第 i 个箱子放完以后，
-                --   本次抓取到的所有箱子都已经放完，
-                --   机器人已经空载。
-                --
-                -- 速度原则：
-                --   机器人空载后，返回路径使用 NLDAcc / NLDVel。
-                ----------------------------------------------------------------
-
-                ----------------------------------------------------------------
-                -- 从最后一个箱子的实际放置点回到放置上方点
-                --
-                -- 点位说明：
-                --   MotionPoint[11 + i]：
-                --     最后一个箱子的放置上方点。
-                --
-                -- 速度说明：
-                --   已经空载，所以使用 NLDAcc / NLDVel。
-                ----------------------------------------------------------------
                 MovL(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
 
                 if CPoint.Paras.OffSet[i] == 1 then
-                    ----------------------------------------------------------------
-                    -- 最后一个箱子如果使用了 offset 过渡点，
-                    -- 返回 offset 过渡点时机器人已经空载。
-                    --
-                    -- 点位说明：
-                    --   MotionPoint[15 + i]：
-                    --     最后一个箱子的放置 offset 过渡点。
-                    --
-                    -- 速度说明：
-                    --   已经空载，所以使用 NLDAcc / NLDVel。
-                    ----------------------------------------------------------------
                     MovL(CPoint.MotionPoint[15 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
                 end
             end
         end
 
-        ----------------------------------------------------------------
-        -- TransMotion Backward:
-        --   从放料侧返回取料侧的过渡点运动。
-        --
-        -- 点位说明：
-        --   MotionPoint[1] ~ MotionPoint[5]：
-        --     用户示教的过渡点。
-        --
-        -- 方向说明：
-        --   Dir.Backward:
-        --     从放料侧返回取料侧，按照 5 -> 1 顺序走过渡点。
-        --
-        -- 速度说明：
-        --   正常情况下箱子已经全部放完，
-        --   所以使用 NLDAcc / NLDVel。
-        ----------------------------------------------------------------
         TransMotion(CPoint, Dir.Backward, NLDAcc, NLDVel)
 
         CPose = GetPose()
         StandyMotion(PalletNumber, CPoint)
 
     else
-        ----------------------------------------------------------------
-        -- 非 WorkType.Pallet:
-        --   这里是拆垛 / 反向流程。
-        --   原逻辑基本保持不变。
-        ----------------------------------------------------------------
 
         if (SingleMotion == false) or (SyncSignal == true)
             or (StateMachine == FSMType.DLR and PalletNumber.Pallet ~= PrePallet) then
