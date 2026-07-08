@@ -1,14 +1,33 @@
 --------------------------------------------------------------
---此文件仅用于定义信号更新
+-- 信号更新文件
+-- signal update file
+-- 本文件负责读取传感器、更新取料许可、控制输送线和处理安全限制信号。
+---------------------------------------------------------------
+-- 信号更新文件双语注释说明
+-- 本文件负责把外部传感器、输送线状态和栈板状态转换成机器人是否可以执行下一次取放动作。
+-- BIB逻辑中，B1/B2表示机器人取料位需要两个实体箱稳定到位；B3用于检测上游额外来箱，防止继续挤压。
+-- SignalReady为true时，src0运动线程才会取出CPoint并执行一次机器人动作。
+-- Signal update file bilingual comment guide
+-- This file converts external sensors, conveyor states, and pallet states into robot pick/place authorization.
+-- In the BIB logic, B1/B2 mean that two physical boxes must be stable at the robot pick area; B3 detects an extra upstream box to prevent pushing/collision.
+-- When SignalReady becomes true, the motion thread in src0 can take the next CPoint and execute one robot cycle.
+---------------------------------------------------------------
+-- 对BIB项目，B1+B2代表一个逻辑箱到位，B3用于防止上游继续挤压。
 ----------------------------------------------------------------
---局部变量
+-- 局部变量
+-- local variables
 local ExecuteIndex = 1      --切换工作栈板标志位
 local CurrentPallet = 0     --当前工作栈板标志位
 local RestrictMove = false  --限制运动信号标志位
 local StackingDirection = 0 --进入高度差限制功能的码垛方向，0：进行右侧码垛，1：进行左侧码垛
+local BIBStableStartTime = {} --BIB双箱到位稳定计时起点；按栈板侧保存，避免阻塞等待影响B3刷新
+-- BIB stable start timestamp per pallet side; avoids blocking waits so B3 can keep refreshing.
 ---------------------------------------------------------------
 ----------------------------------------------------------------
---获取信号
+-- 获取普通取料信号。
+-- read normal pick authorization signal
+-- 当当前栈板未完成且托盘已经放好时，允许该侧进入一次取放循环。
+-- 双输送模式下会把Pallet切换到当前有信号的一侧。
 local function GetSignal(PalletNumber)
     if (PalletNumber.State.Done == false) and (PalletNumber.State.Replace == true) then
         if StateMachine == FSMType.DLR then
@@ -18,6 +37,112 @@ local function GetSignal(PalletNumber)
         SignalReady = true
         LogDebug("Signal acquired for pallet %d", PalletNumber.Pallet)
     end
+end
+
+----------------------------------------------------------------
+--BIB项目输送线控制使能判断
+--只在指定配方启用，避免其它项目误用BIB的双箱到位逻辑。
+local function IsBIBConveyorEnabled()
+    if (BIBConveyorCfg == nil) then
+        return false
+    end
+
+    if (BIBConveyorCfg.Enable ~= true) then
+        return false
+    end
+
+    if (PalletName == "BIB_2x10L")
+        or (PalletName == "BIB_6x3L")
+        or (PalletName == "BIB_2X5L") then
+        return true
+    end
+
+    return false
+end
+
+----------------------------------------------------------------
+--BIB项目输送线控制
+--两个实体纸箱在本项目中作为一个逻辑箱：B1和B2稳定后才授权机器人取一次。
+local function HandleBIBConveyorControl(PalletNumber, State, AllowPickSignal)
+    if (IsBIBConveyorEnabled() ~= true) then
+        return false
+    end
+
+    --只在码垛模式启用输送线控制；拆垛或其它模式继续走原插件逻辑
+    if (PalletNumber.Mode ~= WorkType.Pallet) then
+        return false
+    end
+
+    if (BIBConveyorCfg.Sensor == nil) or (BIBConveyorCfg.Motor == nil) then
+        LogWarn("BIB conveyor configuration is incomplete!")
+        return false
+    end
+
+    local B1Port = BIBConveyorCfg.Sensor.B1
+    local B2Port = BIBConveyorCfg.Sensor.B2
+    local B3Port = BIBConveyorCfg.Sensor.B3
+    local M1Port = BIBConveyorCfg.Motor.M1
+    local M2Port = BIBConveyorCfg.Motor.M2
+
+    if (B1Port == nil) or (B2Port == nil) or (B3Port == nil)
+        or (M1Port == nil) or (M2Port == nil) then
+        LogWarn("BIB conveyor DI/DO port is not configured!")
+        return false
+    end
+
+    local DelayTime = BIBConveyorCfg.DelayTime or 1000
+    local NowTime = Systime()
+    local TimerKey = PalletNumber.Pallet or 0
+    local B1 = CheckDIRes(B1Port.Mode, B1Port.A)
+    local B2 = CheckDIRes(B2Port.Mode, B2Port.A)
+    local B3 = CheckDIRes(B3Port.Mode, B3Port.A)
+
+    --M1必须持续刷新：B1+B2取料位已满且B3检测到第三个纸箱时，立刻停止上游，避免挤压。
+    --M1 must be refreshed continuously: when B1+B2 are full and B3 detects a third carton, stop upstream immediately.
+    if (B1 == ON) and (B2 == ON) and (B3 == ON) then
+        IORes(M1Port.Mode, M1Port.A, OFF)
+    else
+        IORes(M1Port.Mode, M1Port.A, ON)
+    end
+
+    --M2电机控制和机器人取料授权分离：电机持续刷新；只有AllowPickSignal=true时才发SignalReady。
+    --Separate motor control from robot authorization: motor refresh always runs; SignalReady is issued only when allowed.
+    if (B1 == State) and (B2 == State) then
+        if BIBStableStartTime[TimerKey] == nil then
+            BIBStableStartTime[TimerKey] = NowTime
+        end
+
+        if (NowTime - BIBStableStartTime[TimerKey]) >= DelayTime then
+            --稳定时间到达后重新读一次传感器，避免瞬时信号误判。
+            --Re-read sensors after stable delay to avoid transient-signal authorization.
+            B1 = CheckDIRes(B1Port.Mode, B1Port.A)
+            B2 = CheckDIRes(B2Port.Mode, B2Port.A)
+            B3 = CheckDIRes(B3Port.Mode, B3Port.A)
+
+            if (B1 == ON) and (B2 == ON) and (B3 == ON) then
+                IORes(M1Port.Mode, M1Port.A, OFF)
+            else
+                IORes(M1Port.Mode, M1Port.A, ON)
+            end
+
+            if (B1 == State) and (B2 == State) then
+                IORes(M2Port.Mode, M2Port.A, OFF)
+                if AllowPickSignal == true then
+                    GetSignal(PalletNumber)
+                end
+            else
+                BIBStableStartTime[TimerKey] = nil
+                IORes(M2Port.Mode, M2Port.A, ON)
+            end
+        else
+            IORes(M2Port.Mode, M2Port.A, ON)
+        end
+    else
+        BIBStableStartTime[TimerKey] = nil
+        IORes(M2Port.Mode, M2Port.A, ON)
+    end
+
+    return true
 end
 
 ----------------------------------------------------------------
@@ -122,6 +247,7 @@ local function GetDeteMode(PalletNumber, State)
         return
     end
 
+
     local DelayTime = 500
     if Sucker == 0 then
         if (DI(PalletNumber.BoxBeInpPlaceDI1) == State) then
@@ -183,8 +309,18 @@ local function ExecuteSignal(PalletNumber, State)
         if (PalletNumber.State.Done == true) then
             break
         end
-        if (MotionDone == true) then
+
+        local AllowPickSignal = (MotionDone == true)
+        local BIBHandled = HandleBIBConveyorControl(PalletNumber, State, AllowPickSignal)
+
+        if (BIBHandled ~= true) and (MotionDone == true) then
             GetDeteMode(PalletNumber, State)
+            if StateMachine == FSMType.DLR then
+                break
+            end
+        elseif (BIBHandled == true) and (AllowPickSignal == true) then
+            --BIB模式下，电机刷新不退出循环；只有本轮允许取货授权时，保持原DLR单次检查行为。
+            --In BIB mode, motor refresh keeps looping; only an authorization-capable cycle keeps the original DLR single-check behavior.
             if StateMachine == FSMType.DLR then
                 break
             end
