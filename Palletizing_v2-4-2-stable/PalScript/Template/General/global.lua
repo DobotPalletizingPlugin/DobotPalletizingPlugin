@@ -323,7 +323,7 @@ Time =       --延时参数
         Minute = 5015,
         Second = 5016
     },
-    DropDetection = 0 --吸盘延迟检测时间
+    DropDetection = 200 --吸盘延迟检测时间
 }
 ErrorMessage =        --报警信息
 {
@@ -2039,20 +2039,28 @@ function GetPalletStatus(PalletNumber)
 end
 ----------------------------------------------------------------
 --掉料信号检测
-function DropSignalDete(PalletNumber, DeteState, SuckerPort, Mode)
+-- 2026-07-03 Fix:
+-- 1. ReadDeteState must be a function, so the input signal can be read again after Time.DropDetection.
+-- 2. This prevents a temporary/false OFF sample from immediately causing a Box Fall Down alarm.
+-- 3. When a box drop is confirmed, write StateType.DropBox before raising the alarm.
+function DropSignalDete(PalletNumber, ReadDeteState, SuckerPort, Mode)
     if (Mode == DropType.Norm) then
         if (PalletNumber.Partition.Mode == MotionType.Part) and (PartCfg.Enable == true) then
-            if (DeteState == OFF) and (CheckDORes(PartCfg.Port.Mode, PartCfg.Port.A) == ON) then
+            if (ReadDeteState() == OFF) and (CheckDORes(PartCfg.Port.Mode, PartCfg.Port.A) == ON) then
                 Wait(Time.DropDetection)
-                if (DeteState == OFF) and (CheckDORes(PartCfg.Port.Mode, PartCfg.Port.A) == ON) then
-                    IORes(PartCfg.Port.Mode, PartCfg.Port.A, OFF) --数字输出控制吸盘关闭
+                if (ReadDeteState() == OFF) and (CheckDORes(PartCfg.Port.Mode, PartCfg.Port.A) == ON) then
+                    PalletNumber.StateValue.Status = StateType.DropBox
+                    CommitPalletStatus(PalletNumber)
+                    IORes(PartCfg.Port.Mode, PartCfg.Port.A, OFF) --数字输出控制隔板吸盘关闭
                     Alarm("Partition Fall Down!", ErrorMessage.Type.DropErr)
                 end
             end
         else
-            if (DeteState == OFF) and (CheckDORes(SuckerCfg.Port.Mode, SuckerPort) == ON) then
+            if (ReadDeteState() == OFF) and (CheckDORes(SuckerCfg.Port.Mode, SuckerPort) == ON) then
                 Wait(Time.DropDetection)
-                if (DeteState == OFF) and (CheckDORes(SuckerCfg.Port.Mode, SuckerPort) == ON) then
+                if (ReadDeteState() == OFF) and (CheckDORes(SuckerCfg.Port.Mode, SuckerPort) == ON) then
+                    PalletNumber.StateValue.Status = StateType.DropBox
+                    CommitPalletStatus(PalletNumber)
                     IORes(SuckerCfg.Port.Mode, SuckerPort, OFF) --数字输出控制吸盘关闭
                     Alarm("Box Fall Down!", ErrorMessage.Type.DropErr)
                 end
@@ -2060,13 +2068,13 @@ function DropSignalDete(PalletNumber, DeteState, SuckerPort, Mode)
         end
     else
         if (PartCfg.Enable == true) then
-            if (DeteState == ON) and (CheckDORes(PartCfg.Port.Mode, PartCfg.Port.A) == ON) then
+            if (ReadDeteState() == ON) and (CheckDORes(PartCfg.Port.Mode, PartCfg.Port.A) == ON) then
                 PalletNumber.StateValue.Status = StateType.DropBox
                 CommitPalletStatus(PalletNumber)
                 Alarm("TCP With Box!", ErrorMessage.Type.StartErr)
             end
         end
-        if (DeteState == ON) and (CheckDORes(SuckerCfg.Port.Mode, SuckerPort) == ON) then
+        if (ReadDeteState() == ON) and (CheckDORes(SuckerCfg.Port.Mode, SuckerPort) == ON) then
             PalletNumber.StateValue.Status = StateType.DropBox
             CommitPalletStatus(PalletNumber)
             Alarm("TCP With Box!", ErrorMessage.Type.StartErr)
@@ -2086,19 +2094,19 @@ function DropDete(PalletNumber, Mode)
             if (PalletSuckerFunction == SuckerCfg.Type.SSingle) then
                 return
             end
-            DropSignalDete(PalletNumber, ToolDI(SuckerCfg.Dete.PE.A), SuckerCfg.Port.A, Mode)
+            DropSignalDete(PalletNumber, function() return ToolDI(SuckerCfg.Dete.PE.A) end, SuckerCfg.Port.A, Mode)
             if (PalletSuckerFunction == SuckerCfg.Type.Single) then
                 return
             end
-            DropSignalDete(PalletNumber, ToolDI(SuckerCfg.Dete.PE.B), SuckerCfg.Port.B, Mode)
+            DropSignalDete(PalletNumber, function() return ToolDI(SuckerCfg.Dete.PE.B) end, SuckerCfg.Port.B, Mode)
             if (PalletSuckerFunction == SuckerCfg.Type.Double) then
                 return
             end
-            DropSignalDete(PalletNumber, ToolDI(SuckerCfg.Dete.PE.C), SuckerCfg.Port.C, Mode)
+            DropSignalDete(PalletNumber, function() return ToolDI(SuckerCfg.Dete.PE.C) end, SuckerCfg.Port.C, Mode)
             if (PalletSuckerFunction == SuckerCfg.Type.Triple) then
                 return
             end
-            DropSignalDete(PalletNumber, ToolDI(SuckerCfg.Dete.PE.D), SuckerCfg.Port.D, Mode)
+            DropSignalDete(PalletNumber, function() return ToolDI(SuckerCfg.Dete.PE.D) end, SuckerCfg.Port.D, Mode)
             if (PalletSuckerFunction == SuckerCfg.Type.Quadruple) then
                 return
             end
@@ -2107,19 +2115,19 @@ function DropDete(PalletNumber, Mode)
             if (PalletSuckerFunction == SuckerCfg.Type.SSingle) then
                 return
             end
-            DropSignalDete(PalletNumber, DI(SuckerCfg.Dete.Vacuum.A), SuckerCfg.Port.A, Mode)
+            DropSignalDete(PalletNumber, function() return DI(SuckerCfg.Dete.Vacuum.A) end, SuckerCfg.Port.A, Mode)
             if (PalletSuckerFunction == SuckerCfg.Type.Single) then
                 return
             end
-            DropSignalDete(PalletNumber, DI(SuckerCfg.Dete.Vacuum.B), SuckerCfg.Port.B, Mode)
+            DropSignalDete(PalletNumber, function() return DI(SuckerCfg.Dete.Vacuum.B) end, SuckerCfg.Port.B, Mode)
             if (PalletSuckerFunction == SuckerCfg.Type.Double) then
                 return
             end
-            DropSignalDete(PalletNumber, DI(SuckerCfg.Dete.Vacuum.C), SuckerCfg.Port.C, Mode)
+            DropSignalDete(PalletNumber, function() return DI(SuckerCfg.Dete.Vacuum.C) end, SuckerCfg.Port.C, Mode)
             if (PalletSuckerFunction == SuckerCfg.Type.Triple) then
                 return
             end
-            DropSignalDete(PalletNumber, DI(SuckerCfg.Dete.Vacuum.D), SuckerCfg.Port.D, Mode)
+            DropSignalDete(PalletNumber, function() return DI(SuckerCfg.Dete.Vacuum.D) end, SuckerCfg.Port.D, Mode)
             if (PalletSuckerFunction == SuckerCfg.Type.Quadruple) then
                 return
             end
