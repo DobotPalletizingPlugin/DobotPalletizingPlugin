@@ -669,7 +669,8 @@ local function NormalizeLegacyPoint(PointData, RefJ6)
     return P
 end
 
-local function NormalizeSidePoint(PointData, RefPoint, CData, Context, PointIndex, RawInfo, CheckStep, AnchorJoint)
+local function NormalizeSidePoint(PointData, RefPoint, CData, Context, PointIndex, RawInfo, CheckStep, AnchorJoint,
+    ForcedJ6)
     local P = DeepCopy(PointData)
     local Joint = GetPointJoint(P)
     local RefJoint = GetPointJoint(RefPoint)
@@ -681,7 +682,14 @@ local function NormalizeSidePoint(PointData, RefPoint, CData, Context, PointInde
     local RefJ1 = RefJoint and RefJoint[1] or Joint[1]
     local RefJ6 = RefJoint and RefJoint[6] or Joint[6]
     local FixedJ1 = SelectEquivalentAngle(Joint[1], RefJ1, PathJ1SafeMin, PathJ1SafeMax)
-    local FixedJ6 = SelectEquivalentAngle(Joint[6], RefJ6, PathJ6SoftMin, PathJ6SoftMax)
+    local FixedJ6 = nil
+    if type(ForcedJ6) == "number" then
+        -- 侧面取货的去程过渡点沿用旧版已验证平滑的策略：
+        -- 所有过渡点使用同一个放置端J6等效分支，避免每个IK点的J6细小变化导致控制器逐点减速。
+        FixedJ6 = SelectEquivalentAngle(ForcedJ6, RefJ6, PathJ6SoftMin, PathJ6SoftMax)
+    else
+        FixedJ6 = SelectEquivalentAngle(Joint[6], RefJ6, PathJ6SoftMin, PathJ6SoftMax)
+    end
 
     if (FixedJ1 == nil) or (FixedJ6 == nil) then
         ReportUnsafeIK(Context, PointIndex, Joint[1], Joint[6], RefJ1)
@@ -875,13 +883,29 @@ local function PrepareSidePickExecutionPoints(Ret, CData, RawJointInfo)
     Ret.MotionPoint[7] = PickOffset
 
     local RefPoint = Ret.MotionPoint[7]
+
+    -- 旧版不卡的关键行为：普通箱去程的所有过渡点J6统一使用第一个放置点的J6。
+    -- 这里只恢复J6连续策略；J1仍按当前安全逻辑逐点选择等效分支并检查跳变。
+    local PlaceJoint = GetPointJoint(Ret.MotionPoint[8])
+    local PickOffsetJoint = GetPointJoint(RefPoint)
+    local ForwardTransitionJ6 = nil
+    if (PlaceJoint ~= nil) and (PickOffsetJoint ~= nil) then
+        ForwardTransitionJ6 = SelectEquivalentAngle(PlaceJoint[6], PickOffsetJoint[6],
+            PathJ6SoftMin, PathJ6SoftMax)
+    end
+    if ForwardTransitionJ6 == nil then
+        LogError("Impossible de déterminer le J6 commun du trajet aller !")
+        Alarm("Trajectoire J6 invalide !", ErrorMessage.Type.PointErr)
+        return false
+    end
+
     for i = 1, Res.TransNum do
         local AnchorJoint = nil
         if CData.UseTaughtTransition == true then
             AnchorJoint = CData.TransTeachJoint[i]
         end
         local P = NormalizeSidePoint(Ret.MotionPoint[i], RefPoint, CData,
-            "aller", i, RawJointInfo[i], true, AnchorJoint)
+            "aller", i, RawJointInfo[i], true, AnchorJoint, ForwardTransitionJ6)
         if P == nil then
             return false
         end
@@ -966,7 +990,8 @@ local function GetResult(CData)
         ForwardMotionPoint = {},
         BackwardMotionPoint = {},
         DepositLiftMotionPoint = {},
-        Paras = {}
+        Paras = {},
+        MovS = {}
     }
     local ToolNum = 0
     local CJoint = {}
@@ -1089,6 +1114,12 @@ local function GetResult(CData)
     Ret.Paras = DeepCopy(Res)
     Ret.Paras.BackwardTransJ6 = BackwardTransJ6
     Ret.Paras.SidePick = CData.SidePick
+
+    -- MovS轨迹必须使用与本次CPoint计算完全相同的用户坐标系和工具号。
+    -- ecoKey在本项目中固定为0，不用于IO事件。
+    Ret.MovS.UserNum = CData.User
+    Ret.MovS.ToolNum = CData.Tool.Conc
+    Ret.MovS.EcoKey = 0
     return Ret
 end
 -----------------------------------------------------------------

@@ -300,6 +300,17 @@ ToolSpeedWithoutBox = 0                                          --空载速度�
 -- Unloaded speed used for return motion, moving to the pick area, and leaving the place area when not carrying material; it can usually be set higher.
 ToolAccWithoutBox = 0                                            --空载加速度：未抓取物料时使用，影响回程和去取料的节拍。
 -- Unloaded acceleration used when the robot is not carrying material; it affects return motion and travel to the pick point.
+
+-- 普通箱单吸单放去程MovS配置。仅用于真实机器人码垛；隔板、拆垛和多吸模式不使用。
+-- Forward MovS configuration for normal-box single-pick/single-place palletizing only.
+BoxMovSCfg =
+{
+    Enable = true,
+    ForwardSpeed = 300,
+    MinSpeed = 50,
+    MaxSpeed = 500,
+    FileName = "erm_box_forward_movs.csv"
+}
 ----------------------------------------------------------------------------------------------
 ToolHigh = 0                                                     --工具高度：从法兰到吸盘工作面的高度，用于自动计算取放上方点和负载质心。
 -- Tool height from the flange to the sucker working surface; used to automatically calculate pick/place offset points and payload center of mass.
@@ -2814,6 +2825,9 @@ end
 local BoxDropDetecting = false
 local BoxDropStartTime = 0
 local BoxDropAlarmed = false
+-- 跨线程掉箱故障锁存：src2确认掉箱后置true，src0在MovS返回后阻止继续放置。
+-- 只有吸盘输出已经关闭时才清除，避免报警ACK后脚本从MovS下一行继续执行。
+BoxDropFaultActive = false
 
 local function ResetBoxDropDetectionState()
     BoxDropDetecting = false
@@ -2845,6 +2859,7 @@ function BoxDropSignalDete(MotionMode)
     local SuckerState = CheckDORes(SuckerCfg.Port.Mode, SuckerCfg.Port.A)
     if SuckerState ~= ON then
         ResetBoxDropDetectionState()
+        BoxDropFaultActive = false
         return
     end
 
@@ -2883,6 +2898,7 @@ function BoxDropSignalDete(MotionMode)
         and ((DropStateA == OFF) or (DropStateB == OFF)) then
         if BoxDropAlarmed == false then
             BoxDropAlarmed = true
+            BoxDropFaultActive = true
             LogError("Chute de carton détectée. DI23 : %s, DI24 : %s",
                 tostring(DropStateA), tostring(DropStateB))
             -- 不关闭吸盘，保留仍然存在的真空，仅触发报警使机器人停止。
