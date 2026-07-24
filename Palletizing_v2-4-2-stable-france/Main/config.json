@@ -1,6 +1,6 @@
 {
   "name": "Palletizing",
-  "description": "%{tr_dobot_description_palletizing}",
+  "description": "France-specific safety and BIB project updates: DI23/24 drop detection, DI22 compressed-air monitoring, BIB_6x3L left-pallet presence check using the configured left pallet signal, independent partition control via DO16, rhythmic buzzer alarms, French alarm messages, and 50% partition transition speed.",
   "version": "2-4-2-stable-france",
   "scriptVersion": "2-4-2-stable-0330",
   "hotkey": true,

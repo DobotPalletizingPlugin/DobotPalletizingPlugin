@@ -11597,7 +11597,7 @@ function load() {
 
   // If debug isn't set in LS, and we're in Electron, try to load $DEBUG
   if (!r && typeof process !== 'undefined' && 'env' in process) {
-    r = ({"CAMERA_ENV":"undefined","REACT_APP_PALLETIZING_ENV":"undefined","BUILD_TIME":"2026-04-17T04:03:15.446Z"}).DEBUG;
+    r = ({"CAMERA_ENV":"undefined","REACT_APP_PALLETIZING_ENV":"undefined","BUILD_TIME":"2026-04-13T10:33:34.186Z"}).DEBUG;
   }
   return r;
 }
@@ -122475,7 +122475,7 @@ function _wrapNativeSuper(Class) {
 var formatRegExp = /%[sdj%]/g;
 var dist_web_warning = function warning() {}; // don't print warning message when in production env or node runtime
 
-if (typeof process !== 'undefined' && ({"CAMERA_ENV":"undefined","REACT_APP_PALLETIZING_ENV":"undefined","BUILD_TIME":"2026-04-17T04:03:15.446Z"}) && "production" !== 'production' && 0 && 0) {}
+if (typeof process !== 'undefined' && ({"CAMERA_ENV":"undefined","REACT_APP_PALLETIZING_ENV":"undefined","BUILD_TIME":"2026-04-13T10:33:34.186Z"}) && "production" !== 'production' && 0 && 0) {}
 function convertFieldsError(errors) {
   if (!errors || !errors.length) return null;
   var fields = {};
@@ -161410,7 +161410,6 @@ var PalletData_generator = (undefined && undefined.__generator) || function (thi
 
 
 
-
 var PalletData = (0,react.forwardRef)(function (props, ref) {
     var _a, _b, _c;
     var dispatch = useDispatch();
@@ -161556,7 +161555,7 @@ var PalletData = (0,react.forwardRef)(function (props, ref) {
         updateBoth();
     };
     var updateCurrentData = function () { return PalletData_awaiter(void 0, void 0, void 0, function () {
-        var getData, data, sendData, initData, tempRunningData;
+        var getData, data, sendData, tempRunningData;
         var _a;
         return PalletData_generator(this, function (_b) {
             switch (_b.label) {
@@ -161602,18 +161601,8 @@ var PalletData = (0,react.forwardRef)(function (props, ref) {
                         ])];
                 case 1:
                     _b.sent();
-                    initData = {
-                        LayerCount: sendData.layer,
-                        RemainBoxNum: sendData.remainBoxNum,
-                        NextBoxCount: sendData.nextBoxCount,
-                        LayerBoxNum: sendData.layerBoxNum,
-                        AddBoxCount: sendData.addBoxCount,
-                    };
-                    return [4 /*yield*/, palletDatabaseWrite(!type ? DataBaseKey.WorkingDataA : DataBaseKey.WorkingDataB, initData)];
-                case 2:
-                    _b.sent();
                     return [4 /*yield*/, updatePowerDownValue()];
-                case 3:
+                case 2:
                     _b.sent();
                     tempRunningData = !type
                         ? PalletData_assign(PalletData_assign({}, runningData), { left: PalletData_assign(PalletData_assign({}, runningData.left), { layer: data.layer, box: data.box }) }) : PalletData_assign(PalletData_assign({}, runningData), { right: PalletData_assign(PalletData_assign({}, runningData.right), { layer: data.layer, box: data.box }) });
@@ -207695,7 +207684,7 @@ var StationPermission = function () {
                                             _a[StationSetting_Permission_index_module['val-item']] = true,
                                             _a[StationSetting_Permission_index_module['disabled']] = !val,
                                             _a)) }, index));
-                                })] }), item.key)); }) }))] })), (0,jsx_runtime.jsx)("div", Permission_assign({ className: StationSetting_Permission_index_module['permission-footer'] }, { children: (0,jsx_runtime.jsx)("span", { children: "Packaging Time:".concat(dateFormat('YYYY-mm-dd HH:MM:SS', new Date("2026-04-17T04:03:15.446Z" || 0))) }) }))] })));
+                                })] }), item.key)); }) }))] })), (0,jsx_runtime.jsx)("div", Permission_assign({ className: StationSetting_Permission_index_module['permission-footer'] }, { children: (0,jsx_runtime.jsx)("span", { children: "Packaging Time:".concat(dateFormat('YYYY-mm-dd HH:MM:SS', new Date("2026-04-13T10:33:34.186Z" || 0))) }) }))] })));
 };
 /* harmony default export */ const Permission = (StationPermission);
 
