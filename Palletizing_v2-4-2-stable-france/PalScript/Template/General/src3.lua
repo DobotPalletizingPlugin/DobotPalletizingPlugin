@@ -180,6 +180,24 @@ local function NormalizeSidePoint(PointData, RefPoint)
     return P
 end
 
+local function SetSidePickPointErrorInfo(CData, PalletNumber, PointCfg, PointIndex)
+    if (CData ~= nil) and (CData.Pallet ~= nil) then
+        ErrorMessage.PointInfo.PalletNum = CData.Pallet
+    end
+    if (PalletNumber ~= nil) and (PalletNumber.PalletNum ~= nil) then
+        ErrorMessage.PointInfo.Layer = PalletNumber.PalletNum.LayerCount
+    end
+    if PointCfg ~= nil then
+        ErrorMessage.PointInfo.Type = PointCfg
+    end
+    if PointIndex ~= nil then
+        ErrorMessage.PointInfo.Index = PointIndex
+    end
+    LogInfo("Side Pick point error info - pallet: %s, type: %s, layer: %s, index: %s",
+        tostring(ErrorMessage.PointInfo.PalletNum), tostring(ErrorMessage.PointInfo.Type),
+        tostring(ErrorMessage.PointInfo.Layer), tostring(ErrorMessage.PointInfo.Index))
+end
+
 local function CreatePalletData(PalletType)
     return {
         Num = 0,
@@ -607,7 +625,7 @@ end
 -----------------------------------------------------------------
 -- 获取点位结果
 -- get point calculation result
-local function GetResult(CData)
+local function GetResult(CData, PalletNumber)
     local Ret = { MotionPoint = {}, ForwardMotionPoint = {}, BackwardMotionPoint = {}, Paras = {} }
     local ToolNum = 0
     local CJoint = {}
@@ -688,6 +706,7 @@ local function GetResult(CData)
         -- 6取料 -> 7取料上方 -> 1~N去程 -> 16~19偏移 -> 12~15放置上方
         -- -> 8~11放置 -> 放置上方/偏移返回 -> N~1回程 -> 7取料上方。
         if type(CData.PickTeachJoint) ~= "table" then
+            SetSidePickPointErrorInfo(CData, PalletNumber, PointType.Pick.Cfg.Norm, PointType.Pick.Index.A)
             Alarm("Point de prise latérale invalide !", ErrorMessage.Type.PointErr)
             return nil
         end
@@ -698,6 +717,7 @@ local function GetResult(CData)
         local PickOffset = NormalizeSidePoint(Ret.MotionPoint[7], RefPoint)
         if PickOffset == nil then
             LogError("Trajectoire Side Pick invalide entre la prise et le point supérieur !")
+            SetSidePickPointErrorInfo(CData, PalletNumber, PointType.PickOffset.Cfg.Norm, PointType.PickOffset.Index.A)
             Alarm("Trajectoire de prise latérale invalide !", ErrorMessage.Type.PointErr)
             return nil
         end
@@ -714,6 +734,7 @@ local function GetResult(CData)
                     tostring(Res.Times))
                 LogSidePointDebug("[SidePickDebug] failed forward transition point", Ret.MotionPoint[i])
                 LogSidePointDebug("[SidePickDebug] failed forward transition reference", RefPoint)
+                SetSidePickPointErrorInfo(CData, PalletNumber, PointType.Trans.Cfg.Norm, i)
                 Alarm("Trajectoire de transition latérale invalide !", ErrorMessage.Type.PointErr)
                 return nil
             end
@@ -731,6 +752,7 @@ local function GetResult(CData)
                 local InsertPoint = NormalizeSidePoint(Ret.MotionPoint[InsertIndex], RefPoint)
                 if InsertPoint == nil then
                     LogError("Point de décalage Side Pick invalide : index %d", InsertIndex)
+                    SetSidePickPointErrorInfo(CData, PalletNumber, PointType.Insert.Cfg.Norm, InsertIndex)
                     Alarm("Point de décalage Side Pick invalide !", ErrorMessage.Type.PointErr)
                     return nil
                 end
@@ -741,6 +763,7 @@ local function GetResult(CData)
             local AbovePoint = NormalizeSidePoint(Ret.MotionPoint[AboveIndex], RefPoint)
             if AbovePoint == nil then
                 LogError("Point supérieur de dépose Side Pick invalide : index %d", AboveIndex)
+                SetSidePickPointErrorInfo(CData, PalletNumber, PointType.PlaceOffset.Cfg.Norm, AboveIndex)
                 Alarm("Point supérieur de dépose Side Pick invalide !", ErrorMessage.Type.PointErr)
                 return nil
             end
@@ -749,6 +772,7 @@ local function GetResult(CData)
             local PlacePoint = NormalizeSidePoint(Ret.MotionPoint[PlaceIndex], AbovePoint)
             if PlacePoint == nil then
                 LogError("Point de dépose Side Pick invalide : index %d", PlaceIndex)
+                SetSidePickPointErrorInfo(CData, PalletNumber, PointType.Place.Cfg.Norm, PlaceIndex)
                 Alarm("Point de dépose Side Pick invalide !", ErrorMessage.Type.PointErr)
                 return nil
             end
@@ -763,6 +787,7 @@ local function GetResult(CData)
                 local ReturnInsert = NormalizeSidePoint(Ret.MotionPoint[InsertIndex], RefPoint)
                 if ReturnInsert == nil then
                     LogError("Retour au point de décalage Side Pick invalide : index %d", InsertIndex)
+                    SetSidePickPointErrorInfo(CData, PalletNumber, PointType.Insert.Cfg.Norm, InsertIndex)
                     Alarm("Retour Side Pick invalide !", ErrorMessage.Type.PointErr)
                     return nil
                 end
@@ -776,6 +801,7 @@ local function GetResult(CData)
             local P = NormalizeSidePoint(Ret.ForwardMotionPoint[i], RefPoint)
             if P == nil then
                 LogError("Transition retour Side Pick invalide : index %d", i)
+                SetSidePickPointErrorInfo(CData, PalletNumber, PointType.Trans.Cfg.Norm, i)
                 Alarm("Trajectoire retour Side Pick invalide !", ErrorMessage.Type.PointErr)
                 return nil
             end
@@ -787,6 +813,7 @@ local function GetResult(CData)
         local FinalPickOffset = NormalizeSidePoint(Ret.MotionPoint[7], RefPoint)
         if FinalPickOffset == nil then
             LogError("Retour Side Pick vers le point supérieur de prise invalide !")
+            SetSidePickPointErrorInfo(CData, PalletNumber, PointType.PickOffset.Cfg.Norm, PointType.PickOffset.Index.A)
             Alarm("Retour Side Pick invalide !", ErrorMessage.Type.PointErr)
             return nil
         end
@@ -827,7 +854,7 @@ local function GetPoint(PalletNumber, CData)
     LogDebug("Calcul des points de transition terminé à %f", os.clock())
     GetInterPoint(PalletNumber)
     LogDebug("Calcul des points intermédiaires terminé à %f", os.clock())
-    CPoint = GetResult(CData)
+    CPoint = GetResult(CData, PalletNumber)
     return CPoint
 end
 ----------------------------------------------------------------
