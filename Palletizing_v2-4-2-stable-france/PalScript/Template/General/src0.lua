@@ -1511,12 +1511,21 @@ local function PTPMotion(PalletNumber, CPoint)
     --   机器人上还带着后续箱子。
     --
     --   放完当前箱子后，先回到当前放置上方点，
-    --   再从当前位置沿当前用户坐标系 Z 方向额外抬高 250 mm。
+    --   再从当前位置沿当前用户坐标系 Z 方向额外抬高一个箱子高度。
     --
     --   目的：
     --     避免机器人横向移动到下一个箱子放置点时，
     --     夹具或剩余箱子刮碰已经放好的箱子。
-    local DepositLiftHeight = 250
+    local DepositLiftHeight = math.max(
+    350,
+    PalletNumber.BoxProperty.BoxHigh
+    )
+    
+    LogInfo(
+    "DepositLiftHeight=%s mm, BoxHigh=%s mm",
+    tostring(DepositLiftHeight),
+    tostring(PalletNumber.BoxProperty.BoxHigh)
+    )
 
     if (PalletNumber.Mode == WorkType.Pallet) then
         ----------------------------------------------------------------
