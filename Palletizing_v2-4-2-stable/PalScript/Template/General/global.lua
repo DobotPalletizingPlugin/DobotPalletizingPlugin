@@ -2053,7 +2053,6 @@ function DropSignalDete(PalletNumber, DeteState, SuckerPort, Mode)
             if (DeteState == OFF) and (CheckDORes(SuckerCfg.Port.Mode, SuckerPort) == ON) then
                 Wait(Time.DropDetection)
                 if (DeteState == OFF) and (CheckDORes(SuckerCfg.Port.Mode, SuckerPort) == ON) then
-                    IORes(SuckerCfg.Port.Mode, SuckerPort, OFF) --数字输出控制吸盘关闭
                     Alarm("Box Fall Down!", ErrorMessage.Type.DropErr)
                 end
             end

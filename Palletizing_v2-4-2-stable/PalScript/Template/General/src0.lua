@@ -35,7 +35,33 @@ local function SetCoordinate(PalletNumber, PalletNum)
     PalletNumber.Layer = GetLayerCnt(PalletName, PalletNum)
     PalletNumber.Coordinate.UserNum = GetPalletUser(PalletName, PalletNum)
     local CTool = GetPalletTool(PalletName, ToolType.Conc)
+
+    LogInfo("SetCoordinate Tool Check: PalletName=%s, Pallet=%s, UserNum=%s, CTool[1]=%s",
+        tostring(PalletName),
+        tostring(PalletNum),
+        tostring(PalletNumber.Coordinate.UserNum),
+        tostring(CTool and CTool[1]))
+
+    if (CTool == nil) or (CTool[1] == nil) then
+        Alarm("GetPalletTool returned nil!", ErrorMessage.Type.WorkingDataErr)
+    end
+
     PalletNumber.Coordinate.ToolNum = CTool[1]
+
+    local RealTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+    if RealTool ~= nil then
+        LogInfo("SetCoordinate RealTool: ToolNum=%s, X=%s, Y=%s, Z=%s, RX=%s, RY=%s, RZ=%s",
+            tostring(PalletNumber.Coordinate.ToolNum),
+            tostring(RealTool[1]),
+            tostring(RealTool[2]),
+            tostring(RealTool[3]),
+            tostring(RealTool[4]),
+            tostring(RealTool[5]),
+            tostring(RealTool[6]))
+    else
+        LogWarn("SetCoordinate RealTool is nil! ToolNum=%s",
+            tostring(PalletNumber.Coordinate.ToolNum))
+    end
     PalletNumber.BoxProperty.BoxWeight = GetBoxLoad(PalletName, PalletNum)
     local PalletUser = CalcUser(PalletNumber.Coordinate.UserNum, 0, { 0, 0, 0, 0, 0, 0 })
     PalletUser[3] = PalletUser[3] + PalletNumber.ProcessNum.PalletHeight
@@ -58,8 +84,7 @@ end
 --状态初始化
 local function InitFSM()
     GetEnableStatus()
-    if (FirstPallet.StateValue.Enable == 1)
-        and (SecondPallet.StateValue.Enable == 1) then
+    if (FirstPallet.StateValue.Enable == 1)and (SecondPallet.StateValue.Enable == 1) then
         ExecuteSafeModule(FirstPallet, SecondPallet)
         ExecuteSafeModule(SecondPallet, FirstPallet)
         Wait(Time.Thread.s0)
@@ -730,6 +755,7 @@ local function AdjustLiftingHeight(CLH)
             {
                 [LiftingType.EWELLIX] = function()
                     EWLRun(CLH)
+                    EWLGetPosition()
                 end,
                 [LiftingType.GeMinG] = function()
                     SV660CRun(math.ceil(CLH * 10))
@@ -873,8 +899,8 @@ end
 --计算放置箱子数量
 local function CalPlaceBoxNum(PalletNumber, CPoint)
     if (PalletNumber.PalletNum.NextBoxCount <= PalletNumber.ProcessNum.TotalBoxNum) then
-        PalletNumber.ProcessNum.BoxCount = PalletNumber.PalletNum.NextBoxCount        --托盘已放置箱体的数量
-        PalletNumber.PalletNum.NextBoxCount = PalletNumber.PalletNum.NextBoxCount + 1 --托盘下一个放置箱体的数量
+        PalletNumber.ProcessNum.BoxCount = PalletNumber.PalletNum.NextBoxCount        --Nombre de cartons placés sur la palette
+        PalletNumber.PalletNum.NextBoxCount = PalletNumber.PalletNum.NextBoxCount + 1 --Nombre de cartons placés sur une palette
         PalletNumber.ProcessNum.TotalBoxNum = GetBoxCnt(PalletName, PalletNumber.Pallet)
         if PalletNumber.ProcessNum.BoxCount > PalletNumber.ProcessNum.TotalBoxNum then
             LogWarn("BoxCount is wrong!")
@@ -1020,6 +1046,14 @@ local function SuckerSafeIO(State)
     end
 end
 ---------------------------------------------------------------
+--检测吸盘状态
+local function VerifySuckerDO(PortCfg, DOIndex, ExpectedState)
+    local ActualState = CheckDORes(PortCfg.Mode, DOIndex)
+    if (ActualState ~= ExpectedState) then
+        Alarm("Sucker DO" .. tostring(DOIndex) .. " state mismatch!", ErrorMessage.Type.WorkingDataErr)
+    end
+end
+---------------------------------------------------------------
 --初始化吸盘
 local function InitSucker()
     DropDete(FirstPallet, DropType.Prep)
@@ -1054,10 +1088,56 @@ local function InitSucker()
     LogInfo("Initialized sucker success!")
 end
 ---------------------------------------------------------------
+--计算偏心工具
+local function CalcEccTool(PalletNumber, Sucker, BoxNum)
+    local CTool = {}
+    local PlaceNum = math.abs(PalletSuckerFunction)
+    if (PlaceNum == BoxNum) then
+        CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+    else
+        local Ecc = {}
+        local EccTool = {}
+        local EccData = {}
+        Ecc, EccTool, EccData = GetPalletTool(PalletName, ToolType.Ecc)
+        local EccLength = {}
+
+        if (Sucker ~= -1) then
+            EccLength = (PlaceNum - 1) * EccTool[2][1]
+        else
+            EccLength = (PlaceNum - 1) * EccTool[3][1]
+        end
+
+        local SwitchSucker =
+        {
+            [SuckerCfg.Type.Double] = function()
+                EccTool[2][1] = EccTool[1][1] + EccLength * math.cos(EccTool[1][6] / 180 * math.pi)
+                EccTool[2][2] = EccTool[1][2] + EccLength * math.sin(EccTool[1][6] / 180 * math.pi)
+                CTool = DeepCopy(EccTool[2])
+            end,
+            [SuckerCfg.Type.Triple] = function()
+                CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+            end,
+            [SuckerCfg.Type.Quadruple] = function()
+                CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+            end
+        }
+
+        local switch_mode = SwitchSucker[PlaceNum]
+        if switch_mode then
+            switch_mode()
+        else
+            Alarm("Sucker type is wrong!", ErrorMessage.Type.WorkingDataErr)
+        end
+    end
+
+    LogInfoTable("CTool:", CTool)
+    return CTool
+end
+---------------------------------------------------------------
 --打开吸盘
 local function OpenSucker(PalletNumber, CPoint, CIndex)
     local BoxNum = 0
-    local CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+    local CTool = {}
     local SwitchOpenSucker =
     {
         [MotionType.Norm] = function()
@@ -1065,16 +1145,29 @@ local function OpenSucker(PalletNumber, CPoint, CIndex)
                 if (PalletNumber.Mode == WorkType.Pallet) then
                     BoxNum = math.abs(PalletSuckerFunction)
                     SuckerControll(SuckerCfg.Port, ON, BoxNum)
+                    Wait(1000)
+                    local DOs = { SuckerCfg.Port.A, SuckerCfg.Port.B, SuckerCfg.Port.C, SuckerCfg.Port.D }
+                    for i = 1, BoxNum do
+                        VerifySuckerDO(SuckerCfg.Port, DOs[i], ON)
+                    end
                 else
                     BoxNum = CIndex
                     if (CIndex == 1) then
                         IORes(SuckerCfg.Port.Mode, SuckerCfg.Port.A, ON)
+                        Wait(1000)
+                        VerifySuckerDO(SuckerCfg.Port, SuckerCfg.Port.A, ON)
                     elseif (CIndex == 2) then
                         IORes(SuckerCfg.Port.Mode, SuckerCfg.Port.B, ON)
+                        Wait(1000)
+                        VerifySuckerDO(SuckerCfg.Port, SuckerCfg.Port.B, ON)
                     elseif (CIndex == 3) then
                         IORes(SuckerCfg.Port.Mode, SuckerCfg.Port.C, ON)
+                        Wait(1000)
+                        VerifySuckerDO(SuckerCfg.Port, SuckerCfg.Port.C, ON)
                     elseif (CIndex == 4) then
                         IORes(SuckerCfg.Port.Mode, SuckerCfg.Port.D, ON)
+                        Wait(1000)
+                        VerifySuckerDO(SuckerCfg.Port, SuckerCfg.Port.D, ON)
                     end
                 end
                 SuckerSafeIO(OFF)
@@ -1084,9 +1177,15 @@ local function OpenSucker(PalletNumber, CPoint, CIndex)
             else
                 BoxNum = math.ceil(0.5 * CPoint.Paras.Sucker) + 1
                 SuckerControll(SuckerCfg.Port, ON, BoxNum)
+                Wait(1000)
+                local DOs = { SuckerCfg.Port.A, SuckerCfg.Port.B, SuckerCfg.Port.C, SuckerCfg.Port.D }
+                for i = 1, BoxNum do
+                    VerifySuckerDO(SuckerCfg.Port, DOs[i], ON)
+                end
                 SuckerSafeIO(OFF)
             end
             Wait(Time.Pick.In)
+            CTool = CalcEccTool(PalletNumber, CPoint.Paras.Sucker, BoxNum)
             SetPayload(BoxNum * PalletNumber.BoxProperty.BoxWeight + ToolWeight,
                 { CTool[1], CTool[2], 0.5 * (CTool[3] + PalletNumber.BoxProperty.BoxHigh) }) --设置负载指令，加上箱子重量
         end,
@@ -1100,6 +1199,7 @@ local function OpenSucker(PalletNumber, CPoint, CIndex)
                 SuckerSafeIO(OFF)
             end
             Wait(Time.Pick.In)
+            CTool = CalcEccTool(PalletNumber, CPoint.Paras.Sucker, PalletSuckerFunction)
             SetPayload(PalletNumber.ProcessNum.PartitionWeight + ToolWeight,
                 { CTool[1], CTool[2], 0.5 * CTool[3] }) --设置负载指令，加上箱子重量
         end
@@ -1116,8 +1216,15 @@ end
 ---------------------------------------------------------------
 --关闭吸盘
 local function CloseSucker(PalletNumber, CPoint, CIndex)
-    local CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
-    SetPayload(ToolWeight, { CTool[1], CTool[2], 0.5 * CTool[3] }) ---设置负载为吸取箱子的负载
+    local CTool = {}
+    if ((CPoint.Paras.Sucker ~= -1) or (CPoint.Paras.Sucker == -1 and CIndex == PalletSuckerFunction)) then
+        CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+    else
+        CTool = CalcEccTool(PalletNumber, CPoint.Paras.Sucker, CIndex)
+    end
+    local Weight = (PalletSuckerFunction - CIndex) * PalletNumber.BoxProperty.BoxWeight + ToolWeight
+    SetPayload(Weight, { CTool[1], CTool[2], 0.5 * CTool[3] }) ---设置负载为吸取箱子的负载
+    LogInfo("BoxWeight: %s", Weight)
     local SwitchCloseSucker =
     {
         [MotionType.Norm] = function()
@@ -1275,7 +1382,7 @@ local function FilmMotion()
     end
 end
 ---------------------------------------------------------------
---过渡点运动
+--Déplacement du point de transition
 local function TransMotion(CPoint, CDir, Acc, Vel)
     local SD = 1
     local ED = CPoint.Paras.TransNum
@@ -1286,10 +1393,23 @@ local function TransMotion(CPoint, CDir, Acc, Vel)
     end
     for i = SD, ED, CDir do
         if (type(CPoint.MotionPoint[i]) == "table") then
-            if (PalletObstacleFunc == 1) then
-                MovL(CPoint.MotionPoint[i], { a = Acc, v = Vel, cp = 100 }) --运动到层过渡点
+			if ((CPoint.Paras.Mode == MotionType.Part) and (GetToolDO(1) == ON)) then --Unista : si on a un intercalaire, et qu'on aspire (donc avec intercalaire) alors on ralentit 
+                MovJ(CPoint.MotionPoint[i], { a = Acc, v = 10, cp = 100 }) --Maintenir le point de transition appris pour la partition (J4/J5/J6)
+            elseif (PalletObstacleFunc == 1) then
+                MovL(CPoint.MotionPoint[i], { a = Acc, v = Vel, cp = 100 }) --Aller au point de transition du calque
             else
-                MovJ(CPoint.MotionPoint[i], { a = Acc, v = Vel, cp = 100 }) --运动到层过渡点
+                if (CDir == Dir.Backward) then
+                    local P = DeepCopy(CPoint.MotionPoint[i])
+                    local CurrentJoint = GetAngle().joint
+                
+                    if P.joint ~= nil then
+                        P.joint[6] = CurrentJoint[6]
+                    end
+                
+                    MovJ(P, { a = Acc, v = Vel, cp = 100 }) -- backward 回程保持当前 J6
+                else
+                    MovL(CPoint.MotionPoint[i], { a = Acc, v = Vel, cp = 100 }) -- forward 保持原逻辑
+                end
             end
         end
     end
@@ -1315,18 +1435,22 @@ local function SyncMotion(CLH)
     end
 end
 ---------------------------------------------------------------
+---
+---standby move from movJ to movL to avoid hit the stock of interlayer
+---
 --待机位置运动
 local function StandyMotion(PalletNumber, CPoint)
     if (PalletNumber.State.StateReady == false) and (LiftingHeight > 1) then
-        MovJ(CPoint.Paras.Standy, { a = NLDAcc, v = NLDVel, cp = 100 })
+        MovL(CPoint.Paras.Standy, { a = NLDAcc, v = NLDVel, cp = 100 })
         AdjustLiftingHeight(Home)
         SyncMotion(Home)
     elseif (CPoint.Paras.Mode == MotionType.Part) then
         local Standy = { pose = {} }
         Standy.pose = DeepCopy(CPoint.Paras.Standy.pose)
         Standy.pose[3] = Standy.pose[3] - CPoint.Paras.LH
-        MovJ(Standy, { a = NLDAcc, v = NLDVel, cp = 100 })
+        MovL(Standy, { a = NLDAcc, v = NLDVel, cp = 100 })
     else
+        local CurrentJoint = GetAngle().joint
         MovJ(CPoint.MotionPoint[7], { a = NLDAcc, v = NLDVel, cp = 100 })
     end
 end
@@ -1335,28 +1459,32 @@ end
 local function UpdatePartData(PalletNumber, CPoint)
     if (CPoint.Paras.Mode == MotionType.Part) then
         if (PalletNumber.Mode == WorkType.Pallet) then
-            if (PalletNumber.Partition.RePartNum <= 0) then
-                -- 仿真模式，不需要隔板数量报警
-                if SimulateMode == 1 then
-                    PalletNumber.Partition.RePartNum = PalletNumber.ProcessNum.PartitionNum
-                    return
-                end
-                Alarm("Partition is empty!", ErrorMessage.Type.PartErr)
-                PalletNumber.Partition.RePartNum = PalletNumber.ProcessNum.PartitionNum
-                WritePartNum(PalletNumber)
+          if (DI(16) == 0) then
+            PalletNumber.Partition.RePartNum = 0
+          else
+            PalletNumber.Partition.RePartNum = 2
+          end
+          if (PalletNumber.Partition.RePartNum <= 0) then
+            if SimulateMode == 1 then
+              PalletNumber.Partition.RePartNum = PalletNumber.ProcessNum.PartitionNum
+              return
             end
-        else
-            if (PalletNumber.Partition.RePartNum >= PalletNumber.ProcessNum.PartitionNum) then
-                -- 仿真模式，不需要隔板数量报警
-                if SimulateMode == 1 then
-                    PalletNumber.Partition.RePartNum = 0
-                    return
-                end
-                Alarm("Partition is full!", ErrorMessage.Type.PartErr)
-                PalletNumber.Partition.RePartNum = 0
-                WritePartNum(PalletNumber)
-            end
+            Alarm("Partition is empty!", ErrorMessage.Type.PartErr)
+            PalletNumber.Partition.RePartNum = PalletNumber.ProcessNum.PartitionNum
+            WritePartNum(PalletNumber)
+            return
         end
+      else
+        if (PalletNumber.Partition.RePartNum >= PalletNumber.ProcessNum.PartitionNum) then
+          if SimulateMode == 1 then
+            PalletNumber.Partition.RePartNum = 0
+            return
+          end
+          Alarm("Partition is full!", ErrorMessage.Type.PartErr)
+          PalletNumber.Partition.RePartNum = 0
+          WritePartNum(PalletNumber)
+        end
+      end
     end
 end
 ---------------------------------------------------------------
@@ -1392,62 +1520,158 @@ end
 --12~15：放料上方点（自动生成），16~19：放料偏移点（自动生成）
 ---------------------------------------------------------------
 --执行点位运动
+
 local function PTPMotion(PalletNumber, CPoint)
     local CPose = { pose = {} }
+    -- Partition pick slow motion parameters
+    -- PartPickAcc: Acceleration used for slow partition picking motions.
+    -- PartPickSpeed:  Absolute TCP speed for slow partition picking motions, unit: mm/s.
+    local PartPickAcc = 5
+    local PartPickSpeed = 50
 
+    ----------------------------------------------------------------
+    -- 双吸单放 / 多吸单放：放完一个箱子后的额外抬升高度
+    ----------------------------------------------------------------
+    -- DepositLiftHeight:
+    --   当 i < CPoint.Paras.Times 时，说明当前箱子不是最后一个箱子，
+    --   机器人上还带着后续箱子。
+    --
+    --   放完当前箱子后，先回到当前放置上方点，
+    --   再从当前位置沿当前用户坐标系 Z 方向额外抬高 250 mm。
+    --
+    --   目的：
+    --     避免机器人横向移动到下一个箱子放置点时，
+    --     夹具或剩余箱子刮碰已经放好的箱子。
+    local DepositLiftHeight = 250
     if (PalletNumber.Mode == WorkType.Pallet) then
         Wait(Time.Pick.Pre)
         if (CPoint.Paras.Mode == MotionType.Part) then
+			UpdatePartData(PalletNumber, CPoint)
             local CPartPick = DeepCopy(PartPick)
-            CPartPick.pose[3] = CPartPick.pose[3] - CPoint.Paras.LH +
-                PalletNumber.ProcessNum.PartitionHeight * PalletNumber.Partition.RePartNum
-            MovJ(CPoint.MotionPoint[7], { a = NLDAcc, v = SyncMotionVel, cp = 100 })
+            CPartPick.pose[3] = CPartPick.pose[3] - CPoint.Paras.LH
+            local PrePickPart = DeepCopy(CPartPick)
+            --Transformé dans le repere, on ajoute l'offset, puis transformé inverse
+            PrePickPart = GetAddUserPos(0, PalletNumber.Coordinate.PartitionUserNum, PrePickPart)
+            PrePickPart.pose[3] = PrePickPart.pose[3] + 300
+            PrePickPart = GetAddUserPos(PalletNumber.Coordinate.PartitionUserNum, 0, PrePickPart)
             SyncMotion(CPoint.Paras.LH)
-            MovL(CPartPick, { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到抓取点
+            -- Move above the partition pick point before picking
+            MovL(PrePickPart, { a = NLDAcc, v = NLDVel, cp = 100 })
+            PartPickStopCond ="(DI(17) == 1) and (DI(18) == 1)"
+            MovL(CPartPick, {
+              a = PartPickAcc,
+              speed = PartPickSpeed,
+              cp = 0,
+              stopcond = PartPickStopCond
+            })
+            -- Pick the partition
+            OpenSucker(PalletNumber, CPoint)
+            if SimulateMode == 1 then
+                UpdatePickBoxState(PalletNumber, CPoint)
+            end
+            
+            local PartPeelPoint = GetPose()
+            PartPeelPoint = GetAddUserPos(0, PalletNumber.Coordinate.PartitionUserNum, PartPeelPoint)
+            PartPeelPoint.pose[1] = PartPeelPoint.pose[1] - 50
+            PartPeelPoint.pose[2] = PartPeelPoint.pose[2] - 15
+            PartPeelPoint.pose[3] = PartPeelPoint.pose[3] + 250
+            PartPeelPoint = GetAddUserPos(PalletNumber.Coordinate.PartitionUserNum, 0, PartPeelPoint)
+            MovL(PartPeelPoint, { a = PartPickAcc, speed = PartPickSpeed, cp = 0 })
         else
-            if ((SingleMotion == false) or (SyncSignal == true)
-                    or (StateMachine == FSMType.DLR and PalletNumber.Pallet ~= PrePallet)) then
+            if ((SingleMotion == false) or (SyncSignal == true) or (StateMachine == FSMType.DLR and PalletNumber.Pallet ~= PrePallet)) then
                 SingleMotion = true
                 MovJ(CPoint.MotionPoint[7], { a = NLDAcc, v = SyncMotionVel, cp = 100 })
                 SyncMotion(CPoint.Paras.LH)
             end
-            MovL(CPoint.MotionPoint[6], { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到抓取点
+
+            MovL(CPoint.MotionPoint[6], { a = NLDAcc, v = NLDVel, cp = 100 })
+            OpenSucker(PalletNumber, CPoint)
+
+            if SimulateMode == 1 then
+                UpdatePickBoxState(PalletNumber, CPoint)
+            end
+
+            MovL(CPoint.MotionPoint[7], { a = LDAcc, v = LDVel, cp = 100 })
         end
-        OpenSucker(PalletNumber, CPoint)
-        if SimulateMode == 1 then
-            UpdatePickBoxState(PalletNumber, CPoint)
-        end
-        MovL(CPoint.MotionPoint[7], { a = LDAcc, v = LDVel, cp = 100 }) --运动到抓取点上方
         Wait(Time.Pick.Post)
         TransMotion(CPoint, Dir.Forward, LDAcc, LDVel)
         for i = 1, CPoint.Paras.Times do
+            ----------------------------------------------------------------
+            -- CPoint.Paras.Times:
+            --   Le nombre de fois que l'action doit être effectuée.
+            --
+            -- Par exemple:
+            --   Admission/rejet unique : Fois = 1
+            --   Admission/rejet unique : Fois = 2
+            --   Admission/rejet unique : Fois = 3
+            --
+            -- i:
+            --   Quelle boîte est en train d'être placée ?
+            ----------------------------------------------------------------
+
             if CPoint.Paras.OffSet[i] == 1 then
-                MovJ(CPoint.MotionPoint[15 + i], { a = LDAcc, v = LDVel, cp = 100 })         --运动到放置过渡点
-                MovL(CPoint.MotionPoint[11 + i], { a = PlaceAcc, v = PlaceSpeed, cp = 100 }) --运动到放置点正上方
+              if ((CPoint.Paras.Mode == MotionType.Part) and (GetToolDO(1) == ON)) then --Unista : si on a un intercalaire, et qu'on aspire (donc avec intercalaire) alors on ralentit  
+                  MovL(CPoint.MotionPoint[15 + i], { a = LDAcc, v = 10, cp = 100 })
+                  MovL(CPoint.MotionPoint[11 + i], { a = PlaceAcc, v = 5, cp = 100 })
+               else
+                  MovL(CPoint.MotionPoint[15 + i], { a = LDAcc, v = LDVel, cp = 100 })
+                  MovL(CPoint.MotionPoint[11 + i], { a = PlaceAcc, v = PlaceSpeed, cp = 100 })
+                end
             else
-                MovJ(CPoint.MotionPoint[11 + i], { a = LDAcc, v = LDVel, cp = 100 })         --运动到放置点正上方
+                MovL(CPoint.MotionPoint[11 + i], { a = LDAcc, v = LDVel, cp = 100 })
             end
+
             MovL(CPoint.MotionPoint[7 + i], { a = PlaceAcc, v = PlaceSpeed, cp = 100 })
+
             CloseSucker(PalletNumber, CPoint, i)
+
             if SimulateMode == 1 then
                 UpdatePlaceBoxState(PalletNumber, CPoint)
             end
+
             UpdateData(PalletNumber, CPoint)
-            if (CPoint.Paras.Times ~= 1) then
-                MovL(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 })     --运动到放置点正上方
-                if CPoint.Paras.OffSet[i] == 1 then
-                    MovL(CPoint.MotionPoint[15 + i], { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到放置过渡点
+
+            if i < CPoint.Paras.Times then
+                MovL(CPoint.MotionPoint[11 + i], { a = LDAcc, v = LDVel, cp = 100 })
+
+                local currentJoint = { joint = GetAngle().joint }
+
+                local liftPoint = PositiveKin(currentJoint,{ user = PalletNumber.Coordinate.UserNum, tool = PalletNumber.Coordinate.ToolNum })
+
+                liftPoint.pose[3] = liftPoint.pose[3] + DepositLiftHeight
+
+                local errId, liftJointPoint = InverseKin(liftPoint,
+                    { user = PalletNumber.Coordinate.UserNum, tool = PalletNumber.Coordinate.ToolNum })
+
+                if (errId ~= 0) or (liftJointPoint == nil) then
+                    Alarm("InverseKin for deposit lift failed!", ErrorMessage.Type.PointErr)
                 end
+
+                MovL(liftJointPoint, { a = LDAcc, v = LDVel, cp = 0 })
+
+                if CPoint.Paras.OffSet[i] == 1 then
+                    MovL(CPoint.MotionPoint[15 + i], { a = LDAcc, v = LDVel, cp = 100 })
+                end
+
             else
-                MovL(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到放置点正上方
+                MovL(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
+
+                if CPoint.Paras.OffSet[i] == 1 then
+                    MovL(CPoint.MotionPoint[15 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
+                end
             end
         end
+
         TransMotion(CPoint, Dir.Backward, NLDAcc, NLDVel)
+
         CPose = GetPose()
         StandyMotion(PalletNumber, CPoint)
+
     else
+
         if (SingleMotion == false) or (SyncSignal == true)
             or (StateMachine == FSMType.DLR and PalletNumber.Pallet ~= PrePallet) then
+
             if SingleMotion == false then
                 SingleMotion = true
             else
@@ -1456,49 +1680,69 @@ local function PTPMotion(PalletNumber, CPoint)
                 Standy.pose[3] = Standy.pose[3] - CPoint.Paras.LH
                 MovJ(Standy, { a = NLDAcc, v = SyncMotionVel, cp = 100 })
             end
+
             SyncMotion(CPoint.Paras.LH)
         end
+
         TransMotion(CPoint, Dir.Forward, NLDAcc, NLDVel)
+
         for i = CPoint.Paras.Times, 1, -1 do
             if (CPoint.Paras.OffSet[i] == 1) then
-                MovJ(CPoint.MotionPoint[15 + i], { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到放置过渡点
+                MovJ(CPoint.MotionPoint[15 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
             end
-            MovJ(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 })     --运动到放置点正上方
+
+            MovJ(CPoint.MotionPoint[11 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
             MovL(CPoint.MotionPoint[7 + i], { a = NLDAcc, v = NLDVel, cp = 100 })
+
             OpenSucker(PalletNumber, CPoint, i)
+
             if SimulateMode == 1 then
                 UpdatePickBoxState(PalletNumber, CPoint)
             end
+
             UpdateData(PalletNumber, CPoint)
-            MovL(CPoint.MotionPoint[11 + i], { a = LDAcc, v = LDVel, cp = 100 })     --运动到放置点正上方
+
+            MovL(CPoint.MotionPoint[11 + i], { a = LDAcc, v = LDVel, cp = 100 })
+
             if (CPoint.Paras.OffSet[i] == 1) then
-                MovL(CPoint.MotionPoint[15 + i], { a = LDAcc, v = LDVel, cp = 100 }) --运动到放置过渡点
+                MovL(CPoint.MotionPoint[15 + i], { a = LDAcc, v = LDVel, cp = 100 })
             end
         end
+
         TransMotion(CPoint, Dir.Backward, LDAcc, LDVel)
+
         CPose = GetPose()
         MovJ(CPoint.MotionPoint[7], { a = LDAcc, v = LDVel, cp = 100 })
+
         if (CPoint.Paras.Mode == MotionType.Part) then
             local CPartPick = DeepCopy(PartPick)
             CPartPick.pose[3] = CPartPick.pose[3] - CPoint.Paras.LH +
                 PalletNumber.ProcessNum.PartitionHeight * PalletNumber.Partition.RePartNum
-            MovL(CPartPick, { a = NLDAcc, v = NLDVel, cp = 100 })           --运动到抓取点
+
+            MovL(CPartPick, { a = NLDAcc, v = NLDVel, cp = 100 })
         else
-            MovL(CPoint.MotionPoint[6], { a = LDAcc, v = LDVel, cp = 100 }) --运动到抓取点
+            MovL(CPoint.MotionPoint[6], { a = LDAcc, v = LDVel, cp = 100 })
         end
+
         CloseSucker(PalletNumber, CPoint)
+        
+
         if SimulateMode == 1 then
             UpdatePlaceBoxState(PalletNumber, CPoint)
         end
+
         if (CPoint.Paras.Mode == MotionType.Part) then
             MovJ(CPoint.MotionPoint[7], { a = LDAcc, v = LDVel, cp = 100 })
         end
+
         StandyMotion(PalletNumber, CPoint)
     end
-    UpdatePartData(PalletNumber, CPoint)
+
+    --UpdatePartData(PalletNumber, CPoint) --Unista 
     PrePallet = PalletNumber.Pallet
     PrePoseHeight = CPose.pose[3] + CPoint.Paras.LH
 end
+
 ---------------------------------------------------------------
 --运动主流程
 local function PreMotion(PalletNumber, CQueue)
@@ -1598,4 +1842,3 @@ while true do
     Wait(Time.Thread.s0)
     MotionFSM()
 end
-

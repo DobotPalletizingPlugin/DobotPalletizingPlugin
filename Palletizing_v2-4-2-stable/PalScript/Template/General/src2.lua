@@ -34,12 +34,12 @@ end
 local function InitWorkingData(PalletNumber)
     PalletNumber.ProcessNum.TotalBoxNum = GetBoxCnt(PalletName, PalletNumber.Pallet)
     if PalletNumber.Mode == WorkType.Pallet then
-        PalletNumber.ProcessNum.BoxCount = 0 --托盘箱体计数
+        PalletNumber.ProcessNum.BoxCount = 0 --Comptage de caisses-palettes
         PalletNumber.PalletNum.NextBoxCount = 1
         PalletNumber.PalletNum.LayerBoxNum = GetOddBoxCnt(PalletName, PalletNumber.Pallet, 1)
-        PalletNumber.PalletNum.LayerCount = 1                                                  --托盘层数计数
-        PalletNumber.PalletNum.RemainBoxNum = GetOddBoxCnt(PalletName, PalletNumber.Pallet, 1) --托盘不满一层箱体的数量
-        PalletNumber.ProcessNum.InitBoxCount = 0                                               --栈板料箱计数置位
+        PalletNumber.PalletNum.LayerCount = 1                                                  --Nombre de couches par palette
+        PalletNumber.PalletNum.RemainBoxNum = GetOddBoxCnt(PalletName, PalletNumber.Pallet, 1) --Nombre de colis sur une palette ne constituant pas une couche complète
+        PalletNumber.ProcessNum.InitBoxCount = 0                                               --Comptage et configuration de palettes et de conteneurs
         PalletNumber.PalletNum.AddBoxCount = 0
         PalletNumber.ProcessNum.RemainingAddBoxCount = 0
         if (SimulateMode == 1) or (AgingMode == 1) then
@@ -59,11 +59,11 @@ local function InitWorkingData(PalletNumber)
         if SimulateMode == 1 then
             SimulateProcess.Statistic.FirstArrived = 1
         end
-        PalletNumber.ProcessNum.BoxCount = PalletNumber.ProcessNum.TotalBoxNum --托盘箱体计数
+        PalletNumber.ProcessNum.BoxCount = PalletNumber.ProcessNum.TotalBoxNum --Comptage de caisses-palettes
         PalletNumber.PalletNum.NextBoxCount = PalletNumber.ProcessNum.TotalBoxNum
         PalletNumber.PalletNum.LayerBoxNum = PalletNumber.ProcessNum.TotalBoxNum
         PalletNumber.PalletNum.LayerCount = PalletNumber.Layer
-        PalletNumber.PalletNum.RemainBoxNum = GetOddBoxCnt(PalletName, PalletNumber.Pallet, PalletNumber.Layer) --托盘不满一层箱体的数量                                  --托盘不满一层箱体的数量
+        PalletNumber.PalletNum.RemainBoxNum = GetOddBoxCnt(PalletName, PalletNumber.Pallet, PalletNumber.Layer) --Nombre de colis sur une palette ne constituant pas une couche complète
         PalletNumber.ProcessNum.InitBoxCount = PalletNumber.ProcessNum.TotalBoxNum
         local CIndex = 0
         local CNum = 0
@@ -87,7 +87,7 @@ local function InitWorkingData(PalletNumber)
     end
 end
 ---------------------------------------------------------------
---更新码垛参数
+--Mettre à jour les paramètres de palettisation
 local function InitData(PalletNumber)
     if (PalletNumber.State.Replace == true) and (PalletNumber.State.Init == false) then
         if SimulateMode == 1 then
@@ -167,13 +167,13 @@ local function InitData(PalletNumber)
     end
 end
 ---------------------------------------------------------------
---周期性循环检查
+--Contrôles cycliques périodiques
 local function CycleCheckPallet(PalletNumber)
-    if (PalletNumber.State.Replace == true) then           --当前栈板状况
+    if (PalletNumber.State.Replace == true) then           --État actuel de la palette
         if (PalletNumber.State.Done == false) then
             PalletNumber.State.StateReady = true
             if (PalletNumber.Pallet == Pallet) then
-                PalletNumber.StateValue.Status = StateType.Run --码垛/拆垛中
+                PalletNumber.StateValue.Status = StateType.Run --Palettisation/Dépalettisation en cours
                 TriLightStatus(PalletNumber, Light.Green.Blink)
             end
         else
@@ -196,7 +196,9 @@ local function CycleCheckPallet(PalletNumber)
                         if PalletNumber.Pallet == Left then
                             Pallet = Right
                         else
-                            Pallet = Left
+							if SecondPallet.State.Done then--Ajout Unista
+								Pallet = Left
+							end
                         end
                     end
                 end
@@ -205,13 +207,13 @@ local function CycleCheckPallet(PalletNumber)
                 end
             end
             if (PalletNumber.State.FReset == false) then
-                PalletNumber.StateValue.Status = StateType.Stop --栈板已满/已空
+                PalletNumber.StateValue.Status = StateType.Stop --Palette pleine/vide
                 local WorkState = (PalletNumber.Pallet == Left and "LWorkState" or "RWorkState")
                 SetVal(WorkState, PalletNumber.StateValue.Status)
             end
             TriLightStatus(PalletNumber, Light.Yellow.Blink)
             if (BuzzerFunction == true) then
-                DO(BuzzerIO, ON) --开启蜂鸣器
+                DO(BuzzerIO, ON) --Allumez le buzzer.
             end
         end
     else
@@ -220,7 +222,7 @@ local function CycleCheckPallet(PalletNumber)
 end
 
 ----------------------------------------------------------------
---检测栈板更换
+--Detection changement de palette
 local function CheckPallet(PalletNumber)
     if (PalletNumber.State.Done == true) and (PalletNumber.State.Replace == false) then
         PalletNumber.State.FReset = true --第一次判断栈板是否移开
@@ -235,7 +237,7 @@ local function CheckPallet(PalletNumber)
             DO(BuzzerIO, OFF) --关闭蜂鸣器
         end
     end
-    --更换栈板，初始化工作参数
+    --Remettre la palette en place et initialiser les paramètres de fonctionnement.
     if (PalletNumber.State.SReset == true) then
         PalletNumber.Layer = GetLayerCnt(PalletName, PalletNumber.Pallet)
         Capacity.Num.Pallet = Capacity.Num.RePallet + 1
@@ -251,9 +253,9 @@ local function CheckPallet(PalletNumber)
         InitWorkingData(PalletNumber)
         PalletNumber.State.Done = false
 
-        CommitPalletNum(PalletNumber)     --上传已有料箱层数、剩余料箱数
-        PalletNumber.State.FReset = false --第一次判断栈板是否移开，复位标志位
-        PalletNumber.State.SReset = false --第二次判断栈板是否到位，复位标志位
+        CommitPalletNum(PalletNumber)     --Téléversez le nombre de couches de bacs existantes et le nombre de bacs restants.
+        PalletNumber.State.FReset = false --Vérifiez pour la première fois si la palette a été retirée et réinitialisez le indicateur.
+        PalletNumber.State.SReset = false --Effectuez une seconde vérification pour voir si la palette est en position et réinitialisez le drapeau.
 
         if (StateMachine == FSMType.SLR and PalletBeInPlaceOKButton == false) then
             if (PalletNumber.Pallet == Left) and (SecondPallet.State.FReset == true) then

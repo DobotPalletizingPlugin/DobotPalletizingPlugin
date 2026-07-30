@@ -124,13 +124,18 @@ local function GetDeteMode(PalletNumber, State)
 
     if Sucker == 0 then
         if (DI(PalletNumber.BoxBeInpPlaceDI1) == State) then
-            GetSignal(PalletNumber)
+            if (DI(PalletNumber.BoxBeInpPlaceDI1) == State) then
+                GetSignal(PalletNumber)
+            end
         end
     else
         if Sucker == 1 or Sucker == 2 then
             if (DI(PalletNumber.BoxBeInpPlaceDI1) == State)
                 and (DI(PalletNumber.BoxBeInpPlaceDI2) == State) then
-                GetSignal(PalletNumber)
+                if (DI(PalletNumber.BoxBeInpPlaceDI1) == State)
+                    and (DI(PalletNumber.BoxBeInpPlaceDI2) == State) then
+                    GetSignal(PalletNumber)
+                end
             end
             return
         end
@@ -139,7 +144,11 @@ local function GetDeteMode(PalletNumber, State)
             if (DI(PalletNumber.BoxBeInpPlaceDI1) == State)
                 and (DI(PalletNumber.BoxBeInpPlaceDI2) == State)
                 and ((DI(PalletNumber.BoxBeInpPlaceDI3) == State)) then
-                GetSignal(PalletNumber)
+                if (DI(PalletNumber.BoxBeInpPlaceDI1) == State)
+                    and (DI(PalletNumber.BoxBeInpPlaceDI2) == State)
+                    and ((DI(PalletNumber.BoxBeInpPlaceDI3) == State)) then
+                    GetSignal(PalletNumber)
+                end
             end
             return
         end
@@ -149,7 +158,12 @@ local function GetDeteMode(PalletNumber, State)
                 and (DI(PalletNumber.BoxBeInpPlaceDI2) == State)
                 and (DI(PalletNumber.BoxBeInpPlaceDI3) == State)
                 and (DI(PalletNumber.BoxBeInpPlaceDI4) == State) then
-                GetSignal(PalletNumber)
+                if (DI(PalletNumber.BoxBeInpPlaceDI1) == State)
+                    and (DI(PalletNumber.BoxBeInpPlaceDI2) == State)
+                    and (DI(PalletNumber.BoxBeInpPlaceDI3) == State)
+                    and (DI(PalletNumber.BoxBeInpPlaceDI4) == State) then
+                    GetSignal(PalletNumber)
+                end
             end
             return
         end

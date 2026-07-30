@@ -1,10 +1,28 @@
 --------------------------------------------------------------
---此文件仅用于定义点位计算
+-- 点位计算文件
+-- point calculation file
+-- 本文件根据插件配方、箱型、层数、吸盘模式和隔板配置生成CPoint。
+---------------------------------------------------------------
+-- 点位计算文件双语注释说明
+-- 本文件根据配方、箱型、层数、吸盘模式和隔板配置生成CPoint，供src0执行运动。
+-- MotionPoint索引很重要：1~5为过渡点，6为取料点，7为取料上方点，8~11为放置点，12~15为放置上方点，16~19为插入/偏移点。
+-- 隔板逻辑额外保护J6：示教J6和回程J6不能被普通逆解逻辑随意改写，否则可能产生腕部奇异或关节限位问题。
+-- Point calculation file bilingual comment guide
+-- This file generates CPoint from recipe data, box dimensions, layer index, sucker mode, and partition configuration. src0 uses CPoint to execute motion.
+-- MotionPoint indexes are critical: 1~5 transition points, 6 pick point, 7 pick-offset point, 8~11 place points, 12~15 place-offset points, and 16~19 insert/offset points.
+-- Partition motion adds extra J6 protection: taught J6 and return-path J6 should not be overwritten by normal inverse-kinematics logic, otherwise wrist singularity or joint-limit issues may occur.
+---------------------------------------------------------------
+-- CPoint是src0执行运动的输入，包含：
+-- 1. Paras：动作类型、吸盘模式、动作次数、过渡点数量等；
+-- 2. MotionPoint：取料点、放料点、上方点、过渡点；
+-- 3. BackwardMotionPoint：回程专用过渡点，主要用于控制隔板回程的J6分支。
 --------------------------------------------------------------
---局部常量
+-- 局部常量
+-- local constants
 local BufLen = 10
 --------------------------------------------------------------
---局部变量
+-- 局部变量
+-- local variables
 local OffSet =
 {
     {}
@@ -14,6 +32,9 @@ local Point =
     Pose = {}
 }
 
+-- 单笔运动结果模板。
+-- template for one calculated motion result
+-- 每次计算点位时都会把当前动作需要的参数写入Res，再压入运动队列。
 local Res =
 {
     Standy = {},  --待机位置
@@ -40,6 +61,9 @@ local function CreatePalletData(PalletType)
         Standy = { pose = {} },
         PartPick = { pose = {} },
         PartPlace = { pose = {} },
+        PartPickTeachJ6 = nil, --隔板取料示教点J6，用于保持MotionPoint[6]的第6轴不被逆解改写
+        PartTransTeachJ6 = {}, --隔板示教过渡点J6，用于保持MotionPoint[1~5]的第6轴不被改写
+        PartTransTeachPose = {}, --隔板示教过渡点pose缓存：直接使用示教保存pose，避免Tool Rz=90时joint正解产生90度偏差
         Pallet = PalletType,
         User = 0,
         Tool = {
@@ -54,7 +78,9 @@ local FData = CreatePalletData(Left)
 local SData = CreatePalletData(Right)
 
 --------------------------------------------------------------
---初始化隔板数量
+--初始化隔板数量。
+-- 根据配方中每层是否需要隔板，计算本托盘理论需要的隔板总数。
+-- 码垛和拆垛方向相反，所以首尾隔板的计算方式不同。
 local function InitPartition(PalletNumber, CData)
     if (PalletNumber.Partition.Enable == true) then
         if (PalletNumber.Mode == WorkType.Pallet) then
@@ -80,7 +106,9 @@ local function InitPartition(PalletNumber, CData)
     end
 end
 --------------------------------------------------------------
---获取数据序号
+--获取当前动作对应的数据序号。
+-- 普通箱子使用箱体序号；隔板动作使用隔板序号。
+-- 这个序号会决定从插件配方中读取哪一个自动生成点位。
 local function GetDataIndex(PalletNumber, CData)
     local LNum = 0
     for i = 1, PalletNumber.Layer + 1 do
@@ -116,13 +144,35 @@ local function GetDataIndex(PalletNumber, CData)
     end
 end
 ---------------------------------------------------------------
---获取点位数据
+-- 获取点位数据
+-- read point data
 local function GetTeachPoint(PalletNumber, CData)
     if (CData.Init == false) then
         GetDataIndex(PalletNumber, CData)
 
         CData.User = PalletNumber.Coordinate.UserNum
         CData.Tool.Conc = PalletNumber.Coordinate.ToolNum
+
+        LogInfo("src3 GetTeachPoint Tool Check: Pallet=%s, User=%s, Tool=%s, PartitionUser=%s",
+            tostring(CData.Pallet),
+            tostring(CData.User),
+            tostring(CData.Tool.Conc),
+            tostring(PalletNumber.Coordinate.PartitionUserNum))
+
+        local Src3Tool = CalcTool(CData.Tool.Conc, 0, { 0, 0, 0, 0, 0, 0 })
+        if Src3Tool ~= nil then
+            LogInfo("src3 Tool Data: ToolNum=%s, X=%s, Y=%s, Z=%s, RX=%s, RY=%s, RZ=%s",
+                tostring(CData.Tool.Conc),
+                tostring(Src3Tool[1]),
+                tostring(Src3Tool[2]),
+                tostring(Src3Tool[3]),
+                tostring(Src3Tool[4]),
+                tostring(Src3Tool[5]),
+                tostring(Src3Tool[6]))
+        else
+            LogWarn("src3 Tool Data is nil! ToolNum=%s",
+                tostring(CData.Tool.Conc))
+        end
         --local EccTool = {}
         --if (PalletSuckerFunction > 1) then
         --    CData.Tool.Ecc, EccTool, CData.Tool.EccData = GetPalletTool(PalletName, ToolType.Ecc)
@@ -146,20 +196,52 @@ local function GetTeachPoint(PalletNumber, CData)
             if (ProjectType == 1) then
                 local PartPickJoint = { joint = {} }
                 PartPickJoint.joint = DeepCopy(PalletNumber.TeachPoint.TeachPartitionPickPoint.joint)
+                CData.PartPickTeachJ6 = PartPickJoint.joint[6]
                 CData.PartPick = PositiveKin(PartPickJoint, { user = CData.User, tool = CData.Tool.Conc })
             else
+                CData.PartPickTeachJ6 = nil
                 CData.PartPick.pose = DeepCopy(PalletNumber.TeachPoint.TeachPartitionPickPoint.pose)
                 CData.PartPick.pose[3] = CData.PartPick.pose[3] - PalletNumber.ProcessNum.PalletHeight
             end
 
-            ProjectType = CheckTableData(PalletNumber.TeachPoint.TeachPartitionPlacePoint.joint)
-            if (ProjectType == 1) then
-                local PartPlaceJoint = { joint = {} }
-                PartPlaceJoint.joint = DeepCopy(PalletNumber.TeachPoint.TeachPartitionPlacePoint.joint)
-                CData.PartPlace = PositiveKin(PartPlaceJoint, { user = CData.User, tool = CData.Tool.Conc })
-            else
+            --隔板放置点pose处理。
+            --现场日志确认：TeachPartitionPlacePoint.joint + 当前Tool(RZ=90)正解后，
+            --姿态会相对global/示教保存的pose偏约90度。
+            --因此隔板放置点以示教保存的pose为准，不再优先用joint + 当前Tool重新正解。
+            if (PalletNumber.TeachPoint.TeachPartitionPlacePoint.pose ~= nil)
+                and (CheckTableData(PalletNumber.TeachPoint.TeachPartitionPlacePoint.pose) == 1) then
                 CData.PartPlace.pose = DeepCopy(PalletNumber.TeachPoint.TeachPartitionPlacePoint.pose)
-                CData.PartPlace.pose[3] = CData.PartPlace.pose[3] - PalletNumber.ProcessNum.PalletHeight
+            else
+                ProjectType = CheckTableData(PalletNumber.TeachPoint.TeachPartitionPlacePoint.joint)
+                if (ProjectType == 1) then
+                    local PartPlaceJoint = { joint = {} }
+                    PartPlaceJoint.joint = DeepCopy(PalletNumber.TeachPoint.TeachPartitionPlacePoint.joint)
+                    CData.PartPlace = PositiveKin(PartPlaceJoint, { user = CData.User, tool = CData.Tool.Conc })
+                    LogWarn("PartPlace taught pose is invalid; fallback to joint PositiveKin with User=%s, Tool=%s",
+                        tostring(CData.User),
+                        tostring(CData.Tool.Conc))
+                else
+                    LogWarn("PartPlace taught pose and joint are both invalid!")
+                    CData.PartPlace.pose = { 0, 0, 0, 0, 0, 0 }
+                end
+            end
+
+            --保存隔板示教过渡点pose。
+            --本项目现场日志确认：TransPartitionPoint.joint + 当前Tool(RZ=90)正解后，
+            --姿态RZ会相对示教保存的pose偏约90度。
+            --因此隔板过渡点以global/示教保存的pose为准，不再用joint + 当前Tool重新正解pose。
+            CData.PartTransTeachJ6 = {}
+            CData.PartTransTeachPose = {}
+            for i = 1, PalletNumber.TransPartitionPointNum do
+                CData.PartTransTeachJ6[i] = nil
+
+                if (PalletNumber.TeachPoint.TransPartitionPoint.pose[i] ~= nil)
+                    and (CheckTableData(PalletNumber.TeachPoint.TransPartitionPoint.pose[i]) == 1) then
+                    CData.PartTransTeachPose[i] = DeepCopy(PalletNumber.TeachPoint.TransPartitionPoint.pose[i])
+                else
+                    CData.PartTransTeachPose[i] = nil
+                    LogWarn("PartTrans taught pose is nil or invalid! i=%s", tostring(i))
+                end
             end
         end
         CData.Init = true
@@ -167,7 +249,8 @@ local function GetTeachPoint(PalletNumber, CData)
     end
 end
 -----------------------------------------------------------------
---获取点位模式
+-- 获取点位模式
+-- get point mode
 local function GetPointMode(PalletNumber, CData)
     if (PalletNumber.Partition.Enable == true) then
         Res.Mode = MotionType.Norm
@@ -184,7 +267,8 @@ local function GetPointMode(PalletNumber, CData)
     end
 end
 ----------------------------------------------------------------
---计算偏心位置坐标
+-- 计算偏心位置坐标
+-- calculate eccentric position coordinates
 local function GetEccPoint(CData, CPose)
     if (Res.Mode == MotionType.Norm
             and (PalletSuckerFunction == SuckerCfg.Type.Double
@@ -235,7 +319,8 @@ local function GetEccPoint(CData, CPose)
     return CPose
 end
 ----------------------------------------------------------------
---计算取放位置
+-- 计算取放位置
+-- calculate pick/place positions
 local function GetPickPlacePoint(PalletNumber, CData)
     local PickPose = { pose = { 0, 0, 0, 0, 0, 0 } }
     local PlacePose = { pose = { 0, 0, 0, 0, 0, 0 } }
@@ -270,6 +355,10 @@ local function GetPickPlacePoint(PalletNumber, CData)
         if (CData.Index > CData.CompNum) then
             PlacePose.pose[3] = PlacePose.pose[3] - PalletNumber.CompensateZData
         end
+        --隔板放置点比原始计算点抬高10mm，避免隔板下压过深
+        if (Res.Mode == MotionType.Part) then
+            PlacePose.pose[3] = PlacePose.pose[3] + 10
+        end
         if (PalletNumber.Mode == WorkType.Pallet) then
             OffSet[i], Res.Sucker = GetBoxProPerty(PalletName, CData.Pallet, CData.Index + i - 1)
             if (OffSet[i][1] == 0) and (OffSet[i][2] == 0) then
@@ -295,7 +384,8 @@ local function GetPickPlacePoint(PalletNumber, CData)
     Res.Standy = DeepCopy(CData.Standy)
 end
 ---------------------------------------------------------------
---选择自动过渡点
+-- 选择自动过渡点
+-- select automatically generated transition point
 local function GetAutoGenPoint(PalletNumber, CData)
     local TPoint = { pose = {} }
 
@@ -312,15 +402,21 @@ local function GetAutoGenPoint(PalletNumber, CData)
     Res.TransNum = CheckTableData(TPoint.pose)
     if Res.TransNum > 0 then
         TPoint = GetAddUserPos(0, PalletNumber.Coordinate.UserNum, TPoint)
-        TPoint.pose[6] = Point.Pose[8][6] --过渡点与放置姿态一致
+        if Res.Mode == MotionType.Part then
+            --隔板自动过渡点固定为放置点上方100mm，避免沿用过高的示教/自动点Z
+            TPoint.pose[3] = Point.Pose[8][3] + 100
+        else
+            TPoint.pose[6] = Point.Pose[8][6] --常规过渡点与放置姿态一致
+        end
         Point.Pose[1] = DeepCopy(TPoint.pose)
     else
         Point.Pose[1] = { 0, 0, 0, 0, 0, 0 }
     end
 end
 ---------------------------------------------------------------
---选择示教过渡点
-local function GetTransPoint(PalletNumber)
+-- 选择示教过渡点
+-- select taught transition point
+local function GetTransPoint(PalletNumber, CData)
     local CopyPoint = {}
     if Res.Mode == MotionType.Part then
         Res.TransNum = PalletNumber.TransPartitionPointNum
@@ -330,18 +426,35 @@ local function GetTransPoint(PalletNumber)
         CopyPoint = DeepCopy(PalletNumber.TeachPoint.TransPlacePoint)
     end
     local PHeight = Point.Pose[6][3] + TeachPointOffHeight
-    local THeight = Point.Pose[8][3] + PalletNumber.OffsetHeight + OffSet[1][3]
+    local THeight = 0
+    if Res.Mode ~= MotionType.Part then
+        --常规箱子过渡点保持原逻辑
+        THeight = Point.Pose[8][3] + PalletNumber.OffsetHeight + OffSet[1][3]
+    end
 
     for i = 1, Res.TransNum do
-        CopyPoint.pose[i][6] = Point.Pose[8][6] --过渡点与放置姿态一致
+        if (Res.Mode == MotionType.Part)
+            and (CData ~= nil)
+            and (CData.PartTransTeachPose ~= nil)
+            and (CData.PartTransTeachPose[i] ~= nil) then
+            --隔板示教过渡点：使用由joint+当前User/Tool正解出来的pose。
+            --不再强制修改Z，保持客户示教过渡点高度和姿态。
+            CopyPoint.pose[i] = DeepCopy(CData.PartTransTeachPose[i])
+        end
 
-        if CopyPoint.mode[i] == 0 then
-            if CopyPoint.pose[i][3] <= THeight then
-                CopyPoint.pose[i][3] = THeight
-            end
+        if Res.Mode ~= MotionType.Part then
+            CopyPoint.pose[i][6] = Point.Pose[8][6] --常规过渡点与放置姿态一致
+        end
 
-            if CopyPoint.pose[i][3] <= PHeight then
-                CopyPoint.pose[i][3] = PHeight
+        if Res.Mode ~= MotionType.Part then
+            if CopyPoint.mode[i] == 0 then
+                if CopyPoint.pose[i][3] <= THeight then
+                    CopyPoint.pose[i][3] = THeight
+                end
+
+                if CopyPoint.pose[i][3] <= PHeight then
+                    CopyPoint.pose[i][3] = PHeight
+                end
             end
         end
 
@@ -350,7 +463,8 @@ local function GetTransPoint(PalletNumber)
 end
 
 ---------------------------------------------------------------
---计算放料位置
+-- 计算放料位置
+-- calculate place position
 local function GetInterPoint(PalletNumber)
     local PreTrans = { pose = {} }
     local PreOffset = { pose = {} }
@@ -364,7 +478,8 @@ local function GetInterPoint(PalletNumber)
             })
     else
         PrePoint.pose = DeepCopy(Point.Pose[6])
-        PrePoint.pose[3] = PrePoint.pose[3] + TeachPointOffHeight --取料上方点
+        PrePoint.pose[3] = PrePoint.pose[3] + TeachPointOffHeight -- 取料上方点
+        -- pick-offset point above pick position
     end
     Point.Pose[7] = DeepCopy(PrePoint.pose)
 
@@ -386,15 +501,18 @@ local function GetInterPoint(PalletNumber)
 end
 
 -----------------------------------------------------------------
---MotionPoint[index]:
+--MotionPoint索引说明：
 --1~5:过渡点（示教），6:取料（示教），7：取料上方点（自动生成），8~11：放置点（自动生成）
 --12~15：放料上方点（自动生成），16~19：放料偏移点（自动生成）
 -----------------------------------------------------------------
---获取点位结果
+-- 获取点位结果
+-- get point calculation result
 local function GetResult(CData)
-    local Ret = { MotionPoint = {}, Paras = {} }
+    local Ret = { MotionPoint = {}, BackwardMotionPoint = {}, Paras = {} }
     local ToolNum = 0
     local CJoint = {}
+    local BackwardTransJ6 = nil
+    local StandyJoint = nil
     if (Res.Mode == MotionType.Part) then
         ToolNum = math.abs(PalletSuckerFunction) - 1
     else
@@ -405,9 +523,67 @@ local function GetResult(CData)
         end
     end
     CJoint, Res.LH, Res.ErrIndex = GetInvK(PalletName, CData.Pallet, Point.Pose, ToolNum)
+
+    --隔板点位重新按示教工具逆解。
+    --原因：隔板示教点使用客户当前Tool，如果Tool Rz=90，而GetInvK内部选到其它Tool分支，
+    --运行点位会相对示教点出现约90度的Rz偏差。这里仅对隔板模式覆盖关节结果，
+    --保证Point.Pose里的X/Y/Rx/Ry/Rz按示教工具解释。GetInvK仍用于LH和基础可达性检查。
+    if (Res.Mode == MotionType.Part) then
+        for i = 1, 19 do
+            if (Point.Pose[i] ~= nil) and (CheckTableData(Point.Pose[i]) == 1) then
+                local IKPose = { pose = DeepCopy(Point.Pose[i]) }
+                local ErrId = 0
+                local TeachToolJoint = nil
+                ErrId, TeachToolJoint = InverseKin(IKPose,
+                    { user = CData.User, tool = CData.Tool.Conc })
+                if (ErrId == 0) and (TeachToolJoint ~= nil) and (TeachToolJoint.joint ~= nil) then
+                    CJoint[i] = DeepCopy(TeachToolJoint.joint)
+                else
+                    LogWarn("InverseKin with taught tool failed for partition point %d, keep GetInvK result!", i)
+                    if (Res.ErrIndex == 0) then
+                        Res.ErrIndex = i
+                    end
+                end
+            end
+        end
+    end
+
+    --隔板回程过渡点使用终点待机点的J6；去程过渡点仍保持示教J6
+    if (Res.Mode == MotionType.Part) and (Res.Standy ~= nil) and (Res.Standy.pose ~= nil) then
+        local Standy = { pose = {} }
+        Standy.pose = DeepCopy(Res.Standy.pose)
+        Standy.pose[3] = Standy.pose[3] - Res.LH
+        local ErrId = 0
+        ErrId, StandyJoint = InverseKin(Standy,
+            { user = CData.User, tool = CData.Tool.Conc })
+        if (ErrId == 0) and (StandyJoint ~= nil) and (StandyJoint.joint ~= nil) then
+            BackwardTransJ6 = StandyJoint.joint[6]
+            Ret.StandyMotionPoint = DeepCopy(StandyJoint)
+        else
+            LogWarn("InverseKin for partition standby failed, backward transition J6 will keep forward J6!")
+        end
+    end
+
     for i = 1, 19 do
         Ret.MotionPoint[i] = { joint = CJoint[i] }
-        if (i < 6 or i == 12 or i == 16) then
+        if (i < 6) then
+            if (Res.Mode == MotionType.Part) then
+                --隔板过渡点现在以示教pose为准。
+                --不要再强制恢复示教joint[6]，否则会把按pose逆解出来的姿态再次扭回旧joint分支，
+                --在Tool RZ=90的项目里可能重新制造90度偏差。
+            else
+                -- 常规过渡点原逻辑会把过渡点J6强制改成放置点J6。
+                -- 但当过渡点J5接近 ±90° 时，J4/J6处在腕部奇异附近，强行改J6会制造另一套关节分支，
+                -- 后续从取货点/待机点到过渡点容易报 点位预处理超过关节限位。
+                if (Ret.MotionPoint[i].joint[5] ~= nil)
+                    and (math.abs(math.abs(Ret.MotionPoint[i].joint[5]) - 90) < 3) then
+                    -- 接近奇异区：保留GetInvK给出的J6，后续src0会再按当前J6选择最近等效角。
+                else
+                    Ret.MotionPoint[i].joint[6] = CJoint[8][6]
+                end
+            end
+        end
+        if (i == 12 or i == 16) then
             Ret.MotionPoint[i].joint[6] = CJoint[8][6]
         end
         if (i == 13 or i == 17) then
@@ -420,9 +596,29 @@ local function GetResult(CData)
             Ret.MotionPoint[i].joint[6] = CJoint[11][6]
         end
     end
+
+    --隔板回程过渡点副本：J1~J5保持逆解，J6统一改为待机点终点J6
+    if (Res.Mode == MotionType.Part) then
+        for i = 1, Res.TransNum do
+            if (type(Ret.MotionPoint[i]) == "table") then
+                Ret.BackwardMotionPoint[i] = DeepCopy(Ret.MotionPoint[i])
+                if (BackwardTransJ6 ~= nil) and (Ret.BackwardMotionPoint[i].joint ~= nil) then
+                    Ret.BackwardMotionPoint[i].joint[6] = BackwardTransJ6
+                end
+            end
+        end
+    end
+
+    --隔板取料点[6]保持示教时的J6，避免逆解重新选择第6轴角度
+    if (Res.Mode == MotionType.Part) and (CData.PartPickTeachJ6 ~= nil) then
+        Ret.MotionPoint[6].joint[6] = CData.PartPickTeachJ6
+    end
+
     Ret.Paras = DeepCopy(Res)
+    Ret.Paras.BackwardTransJ6 = BackwardTransJ6
     return Ret
 end
+
 -----------------------------------------------------------------
 --获取点位
 local function GetPoint(PalletNumber, CData)
@@ -431,13 +627,13 @@ local function GetPoint(PalletNumber, CData)
     LogDebug("Pick and place point calculation completed at %f", os.clock())
     if (Res.Mode == MotionType.Norm) then
         if (PalletNumber.TransPointMode == 0) then
-            GetTransPoint(PalletNumber)
+            GetTransPoint(PalletNumber, CData)
         else
             GetAutoGenPoint(PalletNumber, CData)
         end
     else
         if (PalletNumber.TransPartPointMode == 0) then
-            GetTransPoint(PalletNumber)
+            GetTransPoint(PalletNumber, CData)
         else
             GetAutoGenPoint(PalletNumber, CData)
         end
