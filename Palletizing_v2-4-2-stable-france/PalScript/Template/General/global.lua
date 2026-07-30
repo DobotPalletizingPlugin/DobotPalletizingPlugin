@@ -300,17 +300,6 @@ ToolSpeedWithoutBox = 0                                          --空载速度�
 -- Unloaded speed used for return motion, moving to the pick area, and leaving the place area when not carrying material; it can usually be set higher.
 ToolAccWithoutBox = 0                                            --空载加速度：未抓取物料时使用，影响回程和去取料的节拍。
 -- Unloaded acceleration used when the robot is not carrying material; it affects return motion and travel to the pick point.
-
--- 普通箱单吸单放去程MovS配置。仅用于真实机器人码垛；隔板、拆垛和多吸模式不使用。
--- Forward MovS configuration for normal-box single-pick/single-place palletizing only.
-BoxMovSCfg =
-{
-    Enable = true,
-    ForwardSpeed = 300,
-    MinSpeed = 50,
-    MaxSpeed = 500,
-    FileName = "erm_box_forward_movs.csv"
-}
 ----------------------------------------------------------------------------------------------
 ToolHigh = 0                                                     --工具高度：从法兰到吸盘工作面的高度，用于自动计算取放上方点和负载质心。
 -- Tool height from the flange to the sucker working surface; used to automatically calculate pick/place offset points and payload center of mass.
@@ -2711,27 +2700,32 @@ function CheckCompressedAirPresence()
 end
 
 ---------------------------------------------------------------
--- BIB_6x3L左托盘到位检查。
--- Check the configured left-pallet presence signal during ACK for BIB_6x3L only.
-function CheckBIBLeftPalletPresence()
-    -- 该专用逻辑只对BIB_6x3L项目生效，其它项目直接放行。
+-- Side Pick左托盘到位检查。
+-- 仅对BIB_6x3L左托盘生效，并且只在人工ACK时调用。
+function CheckSidePickLeftPalletPresence(PalletNumber)
     if PalletName ~= "BIB_6x3L" then
         return true
     end
 
-    -- 不写死DI3，直接读取左托盘对象中配置的第一路到位信号。
-    local LeftPalletDI = FirstPallet.InPlaceA
-    local LeftPalletState = DI(LeftPalletDI)
-
-    if LeftPalletState == ON then
-        LogInfo("Présence de la palette gauche confirmée. DI%s = ON.", LeftPalletDI)
+    -- 右托盘以及其它非左侧对象不执行该专用检查。
+    if PalletNumber ~= FirstPallet then
         return true
     end
 
-    local Message = "La palette gauche n’est pas en position. Veuillez installer la palette gauche avant l’acquittement."
-    LogError("%s DI%s = OFF.", Message, LeftPalletDI)
-    Alarm(Message, ErrorMessage.Type.PalletErr)
+    local InPlaceA = DI(FirstPallet.InPlaceA)
+    local InPlaceB = DI(FirstPallet.InPlaceB)
 
+    if (InPlaceA == ON) and (InPlaceB == ON) then
+        LogInfo("Présence de la palette gauche Side Pick confirmée. DI%s = ON, DI%s = ON.",
+            FirstPallet.InPlaceA, FirstPallet.InPlaceB)
+        return true
+    end
+
+    local Message = "La palette gauche Side Pick n’est pas correctement positionnée. Veuillez vérifier les deux capteurs avant l’acquittement."
+    LogError("%s DI%s = %s, DI%s = %s.", Message,
+        FirstPallet.InPlaceA, tostring(InPlaceA),
+        FirstPallet.InPlaceB, tostring(InPlaceB))
+    Alarm(Message, ErrorMessage.Type.PalletErr)
     return false
 end
 
@@ -2740,46 +2734,75 @@ function GetPalletStatus(PalletNumber)
         PalletNumber.State.Replace = true
         return
     end
-    if (PalletNumber.StateValue.Enable == 1) then
-        if (PalletBeInPlaceOKButton == true) then
-            PalletNumber.State.Replace = (DI(PalletNumber.InPlaceA) == ON)
-                and (DI(PalletNumber.InPlaceB) == ON)
-                and ((DI(PalletNumber.InPlaceOK) == ON)
-                    or (PalletNumber.State.InPlaceOK == true))
-            if (PalletNumber.State.Replace == true) then
-                PalletNumber.State.InPlaceOK = true
-                if (Pallet ~= Idle) then
-                    return
-                end
-                if (StateMachine == FSMType.SLR or StateMachine == FSMType.DLR) then
-                    if (PalletNumber.Pallet == Left and FirstPallet.State.Init == true) then
-                        if (FirstPallet.StateValue.Status == StateType.Idle
-                                and SecondPallet.StateValue.Status ~= StateType.Run
-                                and PalletNumber.State.InPlaceOK == true) then
-                            Pallet = Left
-                        end
-                    elseif (PalletNumber.Pallet == Right and SecondPallet.State.Init == true) then
-                        if (SecondPallet.StateValue.Status == StateType.Idle
-                                and FirstPallet.StateValue.Status ~= StateType.Run
-                                and PalletNumber.State.InPlaceOK == true) then
-                            Pallet = Right
-                        end
-                    end
-                else
-                    if (PalletNumber.StateValue.Status == StateType.Idle) then
-                        Pallet = PalletNumber.Pallet
-                    end
-                end
+
+    if PalletNumber.StateValue.Enable ~= 1 then
+        PalletNumber.State.Replace = false
+        PalletNumber.State.InPlaceOK = false
+        return
+    end
+
+    local PalletDetected = (DI(PalletNumber.InPlaceA) == ON)
+        and (DI(PalletNumber.InPlaceB) == ON)
+
+    if PalletBeInPlaceOKButton == true then
+        if PalletDetected ~= true then
+            PalletNumber.State.Replace = false
+            PalletNumber.State.InPlaceOK = false
+            return
+        end
+
+        -- 已经确认的当前托盘保持锁存。新托盘必须重新按ACK。
+        if PalletNumber.State.InPlaceOK == true then
+            PalletNumber.State.Replace = true
+        elseif DI(PalletNumber.InPlaceOK) == ON then
+            -- ACK时执行客户联锁。所有检查通过后才锁存运行许可。
+            if CheckCompressedAirPresence() ~= true then
+                PalletNumber.State.Replace = false
+                return
             end
+
+            if CheckSidePickLeftPalletPresence(PalletNumber) ~= true then
+                PalletNumber.State.Replace = false
+                return
+            end
+
+            SyncPartitionRemainBySensor(PalletNumber, true)
+            PalletNumber.State.InPlaceOK = true
+            PalletNumber.State.Replace = true
+            LogInfo("Palette %s confirmée par ACK.",
+                (PalletNumber.Pallet == Left) and "gauche" or "droite")
         else
-            PalletNumber.State.Replace = (DI(PalletNumber.InPlaceA) == ON)
-                and (DI(PalletNumber.InPlaceB) == ON)
+            PalletNumber.State.Replace = false
+        end
+
+        if PalletNumber.State.Replace == true then
+            if Pallet ~= Idle then
+                return
+            end
+            if (StateMachine == FSMType.SLR) or (StateMachine == FSMType.DLR) then
+                if (PalletNumber.Pallet == Left) and (FirstPallet.State.Init == true) then
+                    if (FirstPallet.StateValue.Status == StateType.Idle)
+                        and (SecondPallet.StateValue.Status ~= StateType.Run) then
+                        Pallet = Left
+                    end
+                elseif (PalletNumber.Pallet == Right) and (SecondPallet.State.Init == true) then
+                    if (SecondPallet.StateValue.Status == StateType.Idle)
+                        and (FirstPallet.StateValue.Status ~= StateType.Run) then
+                        Pallet = Right
+                    end
+                end
+            elseif PalletNumber.StateValue.Status == StateType.Idle then
+                Pallet = PalletNumber.Pallet
+            end
+        end
+    else
+        PalletNumber.State.Replace = PalletDetected
+        if PalletDetected ~= true then
+            PalletNumber.State.InPlaceOK = false
         end
     end
 end
-----------------------------------------------------------------
---掉料信号检测
--- Dropped-box signal detection.
+
 function DropSignalDete(PalletNumber, DeteState, SuckerPort, Mode)
     if (Mode == DropType.Norm) then
         if (PalletNumber.Partition.Mode == MotionType.Part) and (PartCfg.Enable == true) then
@@ -2825,9 +2848,6 @@ end
 local BoxDropDetecting = false
 local BoxDropStartTime = 0
 local BoxDropAlarmed = false
--- 跨线程掉箱故障锁存：src2确认掉箱后置true，src0在MovS返回后阻止继续放置。
--- 只有吸盘输出已经关闭时才清除，避免报警ACK后脚本从MovS下一行继续执行。
-BoxDropFaultActive = false
 
 local function ResetBoxDropDetectionState()
     BoxDropDetecting = false
@@ -2859,7 +2879,6 @@ function BoxDropSignalDete(MotionMode)
     local SuckerState = CheckDORes(SuckerCfg.Port.Mode, SuckerCfg.Port.A)
     if SuckerState ~= ON then
         ResetBoxDropDetectionState()
-        BoxDropFaultActive = false
         return
     end
 
@@ -2898,7 +2917,6 @@ function BoxDropSignalDete(MotionMode)
         and ((DropStateA == OFF) or (DropStateB == OFF)) then
         if BoxDropAlarmed == false then
             BoxDropAlarmed = true
-            BoxDropFaultActive = true
             LogError("Chute de carton détectée. DI23 : %s, DI24 : %s",
                 tostring(DropStateA), tostring(DropStateB))
             -- 不关闭吸盘，保留仍然存在的真空，仅触发报警使机器人停止。

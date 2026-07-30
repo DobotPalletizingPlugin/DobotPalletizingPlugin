@@ -29,7 +29,8 @@ local BIBStableStartTime = {} --BIB双箱到位稳定计时起点；按栈板侧
 -- 当当前栈板未完成且托盘已经放好时，允许该侧进入一次取放循环。
 -- 双输送模式下会把Pallet切换到当前有信号的一侧。
 local function GetSignal(PalletNumber)
-    if (PalletNumber.State.Done == false) and (PalletNumber.State.Replace == true) then
+    if (PalletNumber.State.Done == false)
+        and (PalletNumber.State.Replace == true) then
         if StateMachine == FSMType.DLR then
             Pallet = PalletNumber.Pallet
         end
@@ -52,8 +53,7 @@ local function IsBIBConveyorEnabled()
     end
 
     if (PalletName == "BIB_2x10L")
-        or (PalletName == "BIB_6x3L")
-        or (PalletName == "BIB_2X5L") then
+        or (PalletName == "BIB_2x5L") then
         return true
     end
 
@@ -143,6 +143,18 @@ local function HandleBIBConveyorControl(PalletNumber, State, AllowPickSignal)
     end
 
     return true
+end
+
+----------------------------------------------------------------
+-- 清除尚未被机器人消费的旧取货许可。
+-- 只在机器人当前没有执行动作(MotionDone=true)时清除，
+-- 避免运动已经开始后由传感器变化影响本次动作。
+local function ClearPendingPickSignal(PalletNumber)
+    if (MotionDone == true) and (SignalReady == true) then
+        SignalReady = false
+        LogDebug("Signal de prise annulé pour la palette %d : signal de présence non valide.",
+            PalletNumber.Pallet)
+    end
 end
 
 ----------------------------------------------------------------
@@ -254,7 +266,11 @@ local function GetDeteMode(PalletNumber, State)
             Wait(DelayTime)
             if (DI(PalletNumber.BoxBeInpPlaceDI1) == State) then
                 GetSignal(PalletNumber)
+            else
+                ClearPendingPickSignal(PalletNumber)
             end
+        else
+            ClearPendingPickSignal(PalletNumber)
         end
     else
         if Sucker == 1 or Sucker == 2 then
@@ -264,7 +280,11 @@ local function GetDeteMode(PalletNumber, State)
                 if (DI(PalletNumber.BoxBeInpPlaceDI1) == State)
                     and (DI(PalletNumber.BoxBeInpPlaceDI2) == State) then
                     GetSignal(PalletNumber)
+                else
+                    ClearPendingPickSignal(PalletNumber)
                 end
+            else
+                ClearPendingPickSignal(PalletNumber)
             end
             return
         end
@@ -278,7 +298,11 @@ local function GetDeteMode(PalletNumber, State)
                     and (DI(PalletNumber.BoxBeInpPlaceDI2) == State)
                     and ((DI(PalletNumber.BoxBeInpPlaceDI3) == State)) then
                     GetSignal(PalletNumber)
+                else
+                    ClearPendingPickSignal(PalletNumber)
                 end
+            else
+                ClearPendingPickSignal(PalletNumber)
             end
             return
         end
@@ -294,7 +318,11 @@ local function GetDeteMode(PalletNumber, State)
                     and (DI(PalletNumber.BoxBeInpPlaceDI3) == State)
                     and (DI(PalletNumber.BoxBeInpPlaceDI4) == State) then
                     GetSignal(PalletNumber)
+                else
+                    ClearPendingPickSignal(PalletNumber)
                 end
+            else
+                ClearPendingPickSignal(PalletNumber)
             end
             return
         end

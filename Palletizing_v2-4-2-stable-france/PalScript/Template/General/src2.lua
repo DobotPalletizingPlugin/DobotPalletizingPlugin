@@ -120,11 +120,8 @@ local function InitData(PalletNumber)
             end
         end
         ReadPalletNum(PalletNumber)          --读取栈板上已有料箱层数、剩余料箱数；DI21项目会跳过历史隔板数量为0的误报警。
-        -- ACK/初始化阶段：先检查DI22压缩空气，再检查BIB_6x3L左托盘，最后检查DI21隔板余量。
+        -- 初始化阶段检查压缩空气并同步隔板余量。Side Pick左托盘检查只在人工ACK时执行。
         if CheckCompressedAirPresence() ~= true then
-            return
-        end
-        if CheckBIBLeftPalletPresence() ~= true then
             return
         end
         SyncPartitionRemainBySensor(PalletNumber, true) --全局共用函数：隔板数量由DI21初始化覆盖，并写入寄存器/控制器全局变量。
@@ -253,21 +250,50 @@ end
 ----------------------------------------------------------------
 --检测栈板更换
 local function CheckPallet(PalletNumber)
-    if (PalletNumber.State.Done == true) and (PalletNumber.State.Replace == false) then
-        PalletNumber.State.FReset = true --第一次判断栈板是否移开
+    -- 托盘检测端口全部读取当前配方写入的变量，不在src2中写死任何DI编号。
+    -- 当A/B配置为同一个DI时，下面的通用逻辑仍等价于单传感器判断。
+    local PalletSensorA = DI(PalletNumber.InPlaceA)
+    local PalletSensorB = DI(PalletNumber.InPlaceB)
+    local PalletRemoved = (PalletSensorA == OFF) or (PalletSensorB == OFF)
+    local PalletPresent = (PalletSensorA == ON) and (PalletSensorB == ON)
+
+    -- 满托盘必须真实离开检测传感器后，才进入换托盘流程。
+    -- Replace=false仅表示运行许可/ACK已清除，不能代表托盘已经被移走。
+    if (PalletNumber.State.Done == true)
+        and (PalletNumber.State.FReset == false)
+        and (PalletRemoved == true) then
+        PalletNumber.State.FReset = true
         PalletNumber.State.InPlaceOK = false
+        PalletNumber.State.Replace = false
         TriLightStatus(PalletNumber, Light.Yellow.On)
+        LogInfo("Palette %s retirée, attente d’une nouvelle palette.",
+            (PalletNumber.Pallet == Left) and "gauche" or "droite")
     end
+
+    -- 旧托盘已经移走后，传感器重新ON只表示新托盘物理到位。
+    -- 此处不初始化工作数据，人工确认模式下继续等待新的ACK。
     if (PalletNumber.State.FReset == true)
-        and ((DI(PalletNumber.InPlaceA) == ON) and (DI(PalletNumber.InPlaceB) == ON)) then
-        PalletNumber.State.SReset = true --第二次判断栈板是否到位
+        and (PalletNumber.State.SReset == false)
+        and (PalletPresent == true) then
+        PalletNumber.State.SReset = true
+        PalletNumber.StateValue.Status = StateType.Stop
+        CommitPalletStatus(PalletNumber)
         TriLightStatus(PalletNumber, Light.Init)
         if BuzzerFunction == true then
             DO(BuzzerIO, OFF) --关闭蜂鸣器
         end
+        LogInfo("Nouvelle palette %s détectée, attente de l’ACK.",
+            (PalletNumber.Pallet == Left) and "gauche" or "droite")
     end
+
+    -- 未启用人工确认时保持原有自动复位功能；
+    -- 启用人工确认时，必须由GetPalletStatus接受新的ACK并锁存InPlaceOK/Replace后才初始化。
+    local AckAccepted = (PalletBeInPlaceOKButton ~= true)
+        or ((PalletNumber.State.InPlaceOK == true)
+            and (PalletNumber.State.Replace == true))
+
     --更换栈板，初始化工作参数
-    if (PalletNumber.State.SReset == true) then
+    if (PalletNumber.State.SReset == true) and (AckAccepted == true) then
         PalletNumber.Layer = GetLayerCnt(PalletName, PalletNumber.Pallet)
         Capacity.Num.Pallet = Capacity.Num.RePallet + 1
         Capacity.Num.RePallet = Capacity.Num.Pallet
@@ -280,11 +306,9 @@ local function CheckPallet(PalletNumber)
         end
         CommitCapacityPallet()
         InitWorkingData(PalletNumber)
-        -- 新托盘/ACK复位阶段：先检查DI22压缩空气，再检查BIB_6x3L左托盘，最后检查DI21隔板余量。
+        -- 新托盘复位阶段只检查压缩空气并同步隔板余量。
+        -- Side Pick左托盘检查由GetPalletStatus在人工ACK时执行。
         if CheckCompressedAirPresence() ~= true then
-            return
-        end
-        if CheckBIBLeftPalletPresence() ~= true then
             return
         end
         SyncPartitionRemainBySensor(PalletNumber, true)
