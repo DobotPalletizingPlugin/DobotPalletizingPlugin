@@ -107,11 +107,56 @@ local function GetPointJoint(PointData)
     return nil
 end
 
+local function LogSidePointDebug(Label, PointData)
+    if type(PointData) ~= "table" then
+        LogWarn("%s is not a table: %s", tostring(Label), tostring(PointData))
+        return
+    end
+    if PointData.joint ~= nil then
+        LogInfoTable(tostring(Label) .. ".joint:", PointData.joint)
+    else
+        LogWarn("%s.joint is nil", tostring(Label))
+    end
+    if PointData.pose ~= nil then
+        LogInfoTable(tostring(Label) .. ".pose:", PointData.pose)
+    else
+        LogWarn("%s.pose is nil", tostring(Label))
+    end
+end
+
+local function LogSidePickFailure(Context, PointData, RefPoint, FixedJ1, FixedJ6, Reason)
+    LogError("[SidePickDebug] %s failed: %s", tostring(Context), tostring(Reason))
+    LogSidePointDebug("[SidePickDebug] target", PointData)
+    LogSidePointDebug("[SidePickDebug] reference", RefPoint)
+
+    local CurrentAngle = GetAngle()
+    if CurrentAngle ~= nil then
+        LogSidePointDebug("[SidePickDebug] current angle", CurrentAngle)
+    else
+        LogWarn("[SidePickDebug] current angle is nil")
+    end
+
+    local CurrentPose = GetPose()
+    if CurrentPose ~= nil then
+        LogSidePointDebug("[SidePickDebug] current pose", CurrentPose)
+    else
+        LogWarn("[SidePickDebug] current pose is nil")
+    end
+
+    if FixedJ1 ~= nil then
+        LogInfo("[SidePickDebug] fixed J1 candidate: %s", tostring(FixedJ1))
+    end
+    if FixedJ6 ~= nil then
+        LogInfo("[SidePickDebug] fixed J6 candidate: %s", tostring(FixedJ6))
+    end
+end
+
 local function NormalizeSidePoint(PointData, RefPoint)
     local P = DeepCopy(PointData)
     local Joint = GetPointJoint(P)
     local RefJoint = GetPointJoint(RefPoint)
     if Joint == nil then
+        LogSidePickFailure("NormalizeSidePoint", PointData, RefPoint, nil, nil, "target joint is nil")
         return nil
     end
     local RefJ1 = RefJoint and RefJoint[1] or Joint[1]
@@ -119,9 +164,15 @@ local function NormalizeSidePoint(PointData, RefPoint)
     local FixedJ1 = SelectEquivalentAngle(Joint[1], RefJ1, PathJ1SafeMin, PathJ1SafeMax)
     local FixedJ6 = SelectEquivalentAngle(Joint[6], RefJ6, PathJ6SoftMin, PathJ6SoftMax)
     if (FixedJ1 == nil) or (FixedJ6 == nil) then
+        LogSidePickFailure("NormalizeSidePoint", PointData, RefPoint, FixedJ1, FixedJ6,
+            "J1 or J6 cannot be normalized into safe range")
         return nil
     end
     if (RefJoint ~= nil) and (math.abs(FixedJ1 - RefJ1) > PathJ1MaxSegment) then
+        LogSidePickFailure("NormalizeSidePoint", PointData, RefPoint, FixedJ1, FixedJ6,
+            "J1 segment delta exceeds limit")
+        LogError("[SidePickDebug] J1 delta: %s, limit: %s", tostring(math.abs(FixedJ1 - RefJ1)),
+            tostring(PathJ1MaxSegment))
         return nil
     end
     Joint[1] = FixedJ1
@@ -658,6 +709,11 @@ local function GetResult(CData)
             local P = NormalizeSidePoint(Ret.MotionPoint[i], RefPoint)
             if P == nil then
                 LogError("Transition aller Side Pick invalide : index %d", i)
+                LogInfo("[SidePickDebug] PalletName=%s, Pallet=%s, Index=%s, TransNum=%s, Times=%s",
+                    tostring(PalletName), tostring(CData.Pallet), tostring(CData.Index), tostring(Res.TransNum),
+                    tostring(Res.Times))
+                LogSidePointDebug("[SidePickDebug] failed forward transition point", Ret.MotionPoint[i])
+                LogSidePointDebug("[SidePickDebug] failed forward transition reference", RefPoint)
                 Alarm("Trajectoire de transition latérale invalide !", ErrorMessage.Type.PointErr)
                 return nil
             end
