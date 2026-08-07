@@ -961,6 +961,9 @@ local function ResetPalletAck(PalletNumber)
     PalletNumber.State.Replace = false
     PalletNumber.State.StateReady = false
     SignalReady = false
+    if PalletNumber.Pallet == Pallet then
+        Pallet = Idle
+    end
 
     LogInfo("Palette %s en attente d’un nouvel ACK.",
         (PalletNumber.Pallet == Left) and "gauche" or "droite")
@@ -998,6 +1001,8 @@ local function CalPlaceBoxNum(PalletNumber, CPoint)
             end
         end
         PalletNumber.State.Done = true -- 将满载布尔变量置为true
+        PalletNumber.StateValue.Status = StateType.Stop
+        CommitPalletStatus(PalletNumber)
         ResetPalletAck(PalletNumber)
         if (StateMachine ~= FSMType.DLR) or
             ((StateMachine == FSMType.DLR) and (FirstPallet.State.Done == true) and (SecondPallet.State.Done == true)) then
@@ -1071,6 +1076,8 @@ local function CalDePalletPlaceBoxNum(PalletNumber, CPoint)
             end
         end
         PalletNumber.State.Done = true -- 将满载布尔变量置为true
+        PalletNumber.StateValue.Status = StateType.Stop
+        CommitPalletStatus(PalletNumber)
         ResetPalletAck(PalletNumber)
         if (StateMachine ~= FSMType.DLR) or
             ((StateMachine == FSMType.DLR) and (FirstPallet.State.Done == true) and (SecondPallet.State.Done == true)) then

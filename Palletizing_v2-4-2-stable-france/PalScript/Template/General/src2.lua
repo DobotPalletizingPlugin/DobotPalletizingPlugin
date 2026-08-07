@@ -276,7 +276,11 @@ local function CheckPallet(PalletNumber)
         and (PalletNumber.State.SReset == false)
         and (PalletPresent == true) then
         PalletNumber.State.SReset = true
-        PalletNumber.StateValue.Status = StateType.Stop
+        if PalletBeInPlaceOKButton == true then
+            PalletNumber.StateValue.Status = StateType.Idle
+        else
+            PalletNumber.StateValue.Status = StateType.Stop
+        end
         CommitPalletStatus(PalletNumber)
         TriLightStatus(PalletNumber, Light.Init)
         if BuzzerFunction == true then
@@ -289,8 +293,7 @@ local function CheckPallet(PalletNumber)
     -- 未启用人工确认时保持原有自动复位功能；
     -- 启用人工确认时，必须由GetPalletStatus接受新的ACK并锁存InPlaceOK/Replace后才初始化。
     local AckAccepted = (PalletBeInPlaceOKButton ~= true)
-        or ((PalletNumber.State.InPlaceOK == true)
-            and (PalletNumber.State.Replace == true))
+        or (PalletNumber.State.SReset == true)
 
     --更换栈板，初始化工作参数
     if (PalletNumber.State.SReset == true) and (AckAccepted == true) then
@@ -313,6 +316,12 @@ local function CheckPallet(PalletNumber)
         end
         SyncPartitionRemainBySensor(PalletNumber, true)
         PalletNumber.State.Done = false
+        PalletNumber.State.InPlaceOK = false
+        PalletNumber.State.Replace = false
+        if PalletBeInPlaceOKButton == true then
+            PalletNumber.StateValue.Status = StateType.Idle
+            CommitPalletStatus(PalletNumber)
+        end
 
         CommitPalletNum(PalletNumber)     --上传已有料箱层数、剩余料箱数
         PalletNumber.State.FReset = false --第一次判断栈板是否移开，复位标志位
