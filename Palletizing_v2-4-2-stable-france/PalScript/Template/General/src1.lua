@@ -21,6 +21,54 @@ local function GetSignal(PalletNumber)
 end
 
 ----------------------------------------------------------------
+--检查当前取料所需的所有来料信号
+local function IsFeedingSignalActive(PalletNumber, State, SensorCount)
+    local SensorPorts =
+    {
+        PalletNumber.BoxBeInpPlaceDI1,
+        PalletNumber.BoxBeInpPlaceDI2,
+        PalletNumber.BoxBeInpPlaceDI3,
+        PalletNumber.BoxBeInpPlaceDI4
+    }
+
+    for i = 1, SensorCount do
+        if DI(SensorPorts[i]) ~= State then
+            return false
+        end
+    end
+    return true
+end
+
+----------------------------------------------------------------
+--来料信号必须在配置时间内连续有效；任一信号失效后由下一检测周期重新计时
+local function ValidateFeedingSignal(PalletNumber, State, SensorCount)
+    if IsFeedingSignalActive(PalletNumber, State, SensorCount) == false then
+        return false
+    end
+
+    local ValidationTime = Time.FeedingValidation
+    if ValidationTime == nil or ValidationTime <= 0 then
+        return true
+    end
+
+    local PollInterval = Time.Thread.s1
+    if PollInterval == nil or PollInterval <= 0 then
+        PollInterval = 1
+    end
+
+    local ElapsedTime = 0
+    while ElapsedTime < ValidationTime do
+        local WaitTime = math.min(PollInterval, ValidationTime - ElapsedTime)
+        Wait(WaitTime)
+        ElapsedTime = ElapsedTime + WaitTime
+        if IsFeedingSignalActive(PalletNumber, State, SensorCount) == false then
+            return false
+        end
+    end
+    return true
+end
+
+----------------------------------------------------------------
 --获取检测模式
 local function GetDeteMode(PalletNumber, State)
     local Num = 0
@@ -122,56 +170,21 @@ local function GetDeteMode(PalletNumber, State)
         return
     end
 
-    local DelayTime = 500
+    local SensorCount = 0
     if Sucker == 0 then
-        if (DI(PalletNumber.BoxBeInpPlaceDI1) == State) then
-            Wait(DelayTime)
-            if (DI(PalletNumber.BoxBeInpPlaceDI1) == State) then
-                GetSignal(PalletNumber)
-            end
-        end
+        SensorCount = 1
     else
         if Sucker == 1 or Sucker == 2 then
-            if (DI(PalletNumber.BoxBeInpPlaceDI1) == State)
-                and (DI(PalletNumber.BoxBeInpPlaceDI2) == State) then
-                Wait(DelayTime)
-                if (DI(PalletNumber.BoxBeInpPlaceDI1) == State)
-                    and (DI(PalletNumber.BoxBeInpPlaceDI2) == State) then
-                    GetSignal(PalletNumber)
-                end
-            end
-            return
+            SensorCount = 2
+        elseif Sucker == 3 or Sucker == 4 then
+            SensorCount = 3
+        elseif Sucker == 5 or Sucker == 6 or Sucker == -1 then
+            SensorCount = 4
         end
+    end
 
-        if Sucker == 3 or Sucker == 4 then
-            if (DI(PalletNumber.BoxBeInpPlaceDI1) == State)
-                and (DI(PalletNumber.BoxBeInpPlaceDI2) == State)
-                and ((DI(PalletNumber.BoxBeInpPlaceDI3) == State)) then
-                Wait(DelayTime)
-                if (DI(PalletNumber.BoxBeInpPlaceDI1) == State)
-                    and (DI(PalletNumber.BoxBeInpPlaceDI2) == State)
-                    and ((DI(PalletNumber.BoxBeInpPlaceDI3) == State)) then
-                    GetSignal(PalletNumber)
-                end
-            end
-            return
-        end
-
-        if Sucker == 5 or Sucker == 6 or Sucker == -1 then
-            if (DI(PalletNumber.BoxBeInpPlaceDI1) == State)
-                and (DI(PalletNumber.BoxBeInpPlaceDI2) == State)
-                and (DI(PalletNumber.BoxBeInpPlaceDI3) == State)
-                and (DI(PalletNumber.BoxBeInpPlaceDI4) == State) then
-                Wait(DelayTime)
-                if (DI(PalletNumber.BoxBeInpPlaceDI1) == State)
-                    and (DI(PalletNumber.BoxBeInpPlaceDI2) == State)
-                    and (DI(PalletNumber.BoxBeInpPlaceDI3) == State)
-                    and (DI(PalletNumber.BoxBeInpPlaceDI4) == State) then
-                    GetSignal(PalletNumber)
-                end
-            end
-            return
-        end
+    if SensorCount > 0 and ValidateFeedingSignal(PalletNumber, State, SensorCount) == true then
+        GetSignal(PalletNumber)
     end
 end
 

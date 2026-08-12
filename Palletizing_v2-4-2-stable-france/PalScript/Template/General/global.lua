@@ -307,6 +307,7 @@ Time =       --延时参数
         In = 1500,
         Post = 0
     },
+    FeedingValidation = 100, --来料信号连续有效确认时间ms
     Place = --放料过程等待时间ms
     {
         In = 1500
