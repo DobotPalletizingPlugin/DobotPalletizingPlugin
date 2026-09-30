@@ -62,7 +62,6 @@ local function InitFSM()
         and (SecondPallet.StateValue.Enable == 1) then
         ExecuteSafeModule(FirstPallet, SecondPallet)
         ExecuteSafeModule(SecondPallet, FirstPallet)
-        Wait(Time.Thread.s0)
         if (PalletBeInPlaceOKButton == false or SimulateMode == 1) then
             GetPalletStatus(FirstPallet)
             GetPalletStatus(SecondPallet)
@@ -716,12 +715,18 @@ local function AdjustLiftingHeight(CLH)
         if (math.abs(CLH - LiftingHeight) == Communication.Lifting.CMaxDis) then
             SyncMotionVel = 2
         else
-            SyncMotionVel = math.ceil(10 * (1 - math.abs(CLH - LiftingHeight) / Communication.Lifting.CMaxDis))
+            if (Communication.Lifting.Mode ~= 0) then
+                SyncMotionVel = math.ceil(30 * (1 - math.abs(CLH - LiftingHeight) / Communication.Lifting.CMaxDis))
+            else
+                SyncMotionVel = math.ceil(10 * (1 - math.abs(CLH - LiftingHeight) / Communication.Lifting.CMaxDis))
+            end
         end
+        SyncMotionVel = NLDVel
         LogInfo("Lifting-Robot motion velocity ratio is %s!", SyncMotionVel)
         LiftingHeight = CLH
         Communication.Lifting.TimesPerHour = Communication.Lifting.TimesPerHour + 1
         LogInfo("Lifting motion target position is %s mm!", CLH)
+        MovJ(LiftingSafetyPoint, { a = NLDAcc, v = NLDVel, cp = 100 })
         if (SimulateMode == 1) then
             SimulateLiftingColumnMove(CLH)
             LogInfo("Simulate mode: moveTo_absolutePosition, %s", CLH)
@@ -760,13 +765,21 @@ end
 local function RobotGoHome()
     local CPose = GetPose()
     local CJoint = GetAngle()
+    local CopyPoint = { pose = {}, joint = {}, mode = {} }
+    local CPoint = { joint = {} }
     if (ResetPathFunc == true) then
-        if (CPose.pose[1] > 400) then
-            HomeTransPointL.joint[6] = 0.5 * CJoint.joint[6]
-            MovL(HomeTransPointL, { a = NLDAcc * 0.25, v = NLDVel * 0.25, cp = 100 })
-        elseif (CPose.pose[1] < -400) then
-            HomeTransPointR.joint[6] = 0.5 * CJoint.joint[6]
-            MovL(HomeTransPointR, { a = NLDAcc * 0.25, v = NLDVel * 0.25, cp = 100 })
+        if (CJoint.joint[1] > 110) then
+            CopyPoint.joint = DeepCopy(FirstPallet.TeachPoint.HomeTransPoint.joint)
+        elseif (CPose.pose[1] < 60) then
+            CopyPoint.joint = DeepCopy(SecondPallet.TeachPoint.HomeTransPoint.joint)
+        end
+        for i = 1, 3 do
+            if type(CopyPoint.joint[i]) == "table" then
+                if (CopyPoint.joint[i][1] ~= 0 and CopyPoint.joint[i][2] ~= 0) then
+                    CPoint.joint = DeepCopy(CopyPoint.joint[i])
+                    MovL(CPoint, { a = NLDAcc * 0.25, v = NLDVel * 0.25, cp = 100 })
+                end
+            end
         end
     end
     MovJ(HomePoint, { a = NLDAcc * 0.25, v = NLDVel * 0.25, cp = 100 })
@@ -1054,10 +1067,55 @@ local function InitSucker()
     LogInfo("Initialized sucker success!")
 end
 ---------------------------------------------------------------
+--计算偏心工具
+local function CalcEccTool(PalletNumber, Sucker, BoxNum)
+    local CTool = {}
+    local PlaceNum = math.abs(PalletSuckerFunction)
+    if (PlaceNum == BoxNum) then
+        CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+    else
+        local Ecc = {}
+        local EccTool = {}
+        local EccData = {}
+        Ecc, EccTool, EccData = GetPalletTool(PalletName, ToolType.Ecc)
+        local EccLength = {}
+
+        if (Sucker ~= -1) then
+            EccLength = (PlaceNum - 1) * EccTool[2][1]
+        else
+            EccLength = (PlaceNum - 1) * EccTool[3][1]
+        end
+
+        local SwitchSucker =
+        {
+            [SuckerCfg.Type.Double] = function()
+                EccTool[2][1] = EccTool[1][1] + EccLength * math.cos(EccTool[1][6] / 180 * math.pi)
+                EccTool[2][2] = EccTool[1][2] + EccLength * math.sin(EccTool[1][6] / 180 * math.pi)
+                CTool = DeepCopy(EccTool[2])
+            end,
+            [SuckerCfg.Type.Triple] = function()
+                CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+            end,
+            [SuckerCfg.Type.Quadruple] = function()
+                CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+            end
+        }
+
+        local switch_mode = SwitchSucker[PlaceNum]
+        if switch_mode then
+            switch_mode()
+        else
+            Alarm("Sucker type is wrong!", ErrorMessage.Type.WorkingDataErr)
+        end
+    end
+
+    return CTool
+end
+---------------------------------------------------------------
 --打开吸盘
 local function OpenSucker(PalletNumber, CPoint, CIndex)
     local BoxNum = 0
-    local CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+    local CTool = {}
     local SwitchOpenSucker =
     {
         [MotionType.Norm] = function()
@@ -1087,8 +1145,12 @@ local function OpenSucker(PalletNumber, CPoint, CIndex)
                 SuckerSafeIO(OFF)
             end
             Wait(Time.Pick.In)
-            SetPayload(BoxNum * PalletNumber.BoxProperty.BoxWeight + ToolWeight,
-                { CTool[1], CTool[2], 0.5 * (CTool[3] + PalletNumber.BoxProperty.BoxHigh) }) --设置负载指令，加上箱子重量
+            CTool = CalcEccTool(PalletNumber, CPoint.Paras.Sucker, BoxNum)
+            local TemTool = { CTool[1], CTool[2], 0.5 * (CTool[3] + PalletNumber.BoxProperty.BoxHigh) }
+            local Weight = BoxNum * PalletNumber.BoxProperty.BoxWeight + ToolWeight
+            LogInfo("[OpenSucker] Weight: %s", Weight)
+            LogInfoTable("[CloseSucker] Tool:", TemTool)
+            SetPayload(Weight, TemTool) --设置负载指令，加上箱子重量
         end,
         [MotionType.Part] = function()
             if (PartCfg.Enable == true) then
@@ -1100,8 +1162,12 @@ local function OpenSucker(PalletNumber, CPoint, CIndex)
                 SuckerSafeIO(OFF)
             end
             Wait(Time.Pick.In)
-            SetPayload(PalletNumber.ProcessNum.PartitionWeight + ToolWeight,
-                { CTool[1], CTool[2], 0.5 * CTool[3] }) --设置负载指令，加上箱子重量
+            CTool = CalcEccTool(PalletNumber, CPoint.Paras.Sucker, PalletSuckerFunction)
+            local TemTool = { CTool[1], CTool[2], 0.5 * CTool[3] }
+            local Weight = PalletNumber.ProcessNum.PartitionWeight + ToolWeight
+            LogInfo("[OpenSucker] Weight: %s", Weight)
+            LogInfoTable("[CloseSucker] Tool:", TemTool)
+            SetPayload(Weight, TemTool) --设置负载指令，加上箱子重量
         end
     }
 
@@ -1116,8 +1182,19 @@ end
 ---------------------------------------------------------------
 --关闭吸盘
 local function CloseSucker(PalletNumber, CPoint, CIndex)
-    local CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
-    SetPayload(ToolWeight, { CTool[1], CTool[2], 0.5 * CTool[3] }) ---设置负载为吸取箱子的负载
+    local CTool = {}
+    local Weight = 0
+    if ((CPoint.Paras.Sucker ~= -1) or (CPoint.Paras.Sucker == -1 and CIndex == PalletSuckerFunction)) then
+        CTool = CalcTool(PalletNumber.Coordinate.ToolNum, 0, { 0, 0, 0, 0, 0, 0 })
+        Weight = ToolWeight
+    else
+        CTool = CalcEccTool(PalletNumber, CPoint.Paras.Sucker, CIndex)
+        Weight = (PalletSuckerFunction - CIndex) * PalletNumber.BoxProperty.BoxWeight + ToolWeight
+    end
+    local TemTool = { CTool[1], CTool[2], 0.5 * CTool[3] }
+    LogInfo("[CloseSucker] Weight: %s", Weight)
+    LogInfoTable("[CloseSucker] Tool:", TemTool)
+    SetPayload(Weight, TemTool) ---设置负载为吸取箱子的负载
     local SwitchCloseSucker =
     {
         [MotionType.Norm] = function()
@@ -1401,15 +1478,15 @@ local function PTPMotion(PalletNumber, CPoint)
             local CPartPick = DeepCopy(PartPick)
             CPartPick.pose[3] = CPartPick.pose[3] - CPoint.Paras.LH +
                 PalletNumber.ProcessNum.PartitionHeight * PalletNumber.Partition.RePartNum
-            MovJ(CPoint.MotionPoint[7], { a = NLDAcc, v = SyncMotionVel, cp = 100 })
             SyncMotion(CPoint.Paras.LH)
+            MovJ(CPoint.MotionPoint[7], { a = NLDAcc, v = SyncMotionVel, cp = 100 })
             MovL(CPartPick, { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到抓取点
         else
             if ((SingleMotion == false) or (SyncSignal == true)
                     or (StateMachine == FSMType.DLR and PalletNumber.Pallet ~= PrePallet)) then
                 SingleMotion = true
-                MovJ(CPoint.MotionPoint[7], { a = NLDAcc, v = SyncMotionVel, cp = 100 })
                 SyncMotion(CPoint.Paras.LH)
+                MovJ(CPoint.MotionPoint[7], { a = NLDAcc, v = SyncMotionVel, cp = 100 })
             end
             MovL(CPoint.MotionPoint[6], { a = NLDAcc, v = NLDVel, cp = 100 }) --运动到抓取点
         end
@@ -1448,6 +1525,7 @@ local function PTPMotion(PalletNumber, CPoint)
     else
         if (SingleMotion == false) or (SyncSignal == true)
             or (StateMachine == FSMType.DLR and PalletNumber.Pallet ~= PrePallet) then
+            SyncMotion(CPoint.Paras.LH)
             if SingleMotion == false then
                 SingleMotion = true
             else
@@ -1456,7 +1534,6 @@ local function PTPMotion(PalletNumber, CPoint)
                 Standy.pose[3] = Standy.pose[3] - CPoint.Paras.LH
                 MovJ(Standy, { a = NLDAcc, v = SyncMotionVel, cp = 100 })
             end
-            SyncMotion(CPoint.Paras.LH)
         end
         TransMotion(CPoint, Dir.Forward, NLDAcc, NLDVel)
         for i = CPoint.Paras.Times, 1, -1 do

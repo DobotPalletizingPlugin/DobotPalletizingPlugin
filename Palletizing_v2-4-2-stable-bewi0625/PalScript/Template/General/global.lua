@@ -44,6 +44,11 @@ DropType =       --掉料报警类型
     Norm = 0,    --掉料检测信号OFF，吸盘信号ON，触发掉料报警
     Prep = 1     --掉料检测信号ON，吸盘信号ON，触发工艺包启动末端带料报警
 }
+SafeType =       --安全类型
+{
+    Init = 0,    --初始化
+    Norm = 1     --正常
+}
 ToolType =       --工具类型
 {
     Conc = 0,    --同心工具
@@ -199,8 +204,6 @@ ToolWeight = 0                                                   --工具重量
 TeachPointOffHeight = 300                                        --取料示教点偏移高度
 HomePoint = { joint = { 90, 0, 90, 0, -90, 0 } }                 --安全点
 HomePointPose = { pose = { 175.6, -874.8, 918.7, 180, 0, 180 } }
-HomeTransPointL = { joint = { 166, 8, 63, 19, -90, 0 } }
-HomeTransPointR = { joint = { -13, 7, 63, 18, -90, 0 } }
 PartSafePoint = { joint = { 90, 0, 90, 0, -90, 0 } }             --隔板安全点
 LiftingSafetyPoint = { joint = { 90, -29, 114, 4, -90, 0 } }     --空载升降柱上升安全点
 LiftingSafetyPoint_HL = { joint = { 90, -45, 120, 15, -90, 0 } } --空载升降柱上升安全点
@@ -269,7 +272,13 @@ SuckerCfg =           --吸盘控制配置
             C = 20,
             D = 20
         }
-    }
+    },
+    SPort =
+    {
+        Enable = true, --false：关闭，true：开启
+        Mode = 0,   --IO类型, 0：通用IO，1：末端IO
+        A = 21
+    },
 }
 ------------------------------------------------------------------------------------------------
 Capacity = --产能参数
@@ -447,6 +456,17 @@ local function CreatePalletTemplate(CPallet, NearJoint)
             }
         },
         TeachPoint = {
+            HomeTransPoint = {
+                pose =
+                {
+                    {}, {}, {}
+                },
+                joint =
+                {
+                    {}, {}, {}
+                },
+                mode = {}
+            }, --复位轨迹示教过渡点（上位机配置）
             TransPlacePoint =
             {
                 pose =

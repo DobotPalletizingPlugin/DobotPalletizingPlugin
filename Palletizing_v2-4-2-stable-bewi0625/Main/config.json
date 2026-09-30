@@ -1,8 +1,8 @@
 {
   "name": "Palletizing",
   "description": "%{tr_dobot_description_palletizing}",
-  "version": "2-4-2-stable",
-  "scriptVersion": "2-4-2-stable-0330",
+  "version": "2-4-2-stable-bewi0625",
+  "scriptVersion": "2-4-2-stable-bewi",
   "hotkey": true,
   "applicationDisplayed": {
     "applicationTitle": "Palletizing",
