@@ -1,0 +1,66 @@
+升降安全姿态修改说明（SafeLift 定制版）
+
+适用目录：Palletizing_v2-5-0-stable-SafeLift
+以下文件路径均相对于此目录。行号仅供定位，后续编辑可能改变行号。
+
+一、必须修改的位置：前端实际下发值
+
+文件：Main/index.html
+当前位置：第 185430 行，搜索“LiftingSafetyPoint:”定位。
+
+当前内容：
+LiftingSafetyPoint: "{ joint = {90, -15, 105, 0, -90, 0} }", LiftingSafetyPoint_HL: "{ joint = {90, -15, 105, 0, -90, 0} }",
+
+将两个 joint 中的六个数字替换为需要的角度，保留引号、花括号和逗号格式。
+数字顺序为 J1、J2、J3、J4、J5、J6，单位为度。
+
+LiftingSafetyPoint：普通模式使用。
+LiftingSafetyPoint_HL：高负载模式使用。
+如果两种模式要用同一姿态，两个值必须一起修改。
+
+本定制版在实际下发位置固定了姿态，不再从项目保存的
+debug.saftyPoint.lift / debug.saftyPoint.liftHL 读取。
+因此，只修改 index.html 其他位置的 lift / liftHL 默认数组不会改变运行姿态。
+前端“码垛安全原点”对应 HomePoint，也不是这里的升降姿态。
+
+二、建议同步修改的位置：Lua 模板默认值
+
+文件：PalScript/Template/General/global.lua
+当前位置：第 291～292 行。
+
+建议同步为与前端相同的值，例如：
+LiftingSafetyPoint = { joint = { 90, -15, 105, 0, -90, 0 } }
+LiftingSafetyPoint_HL = { joint = { 90, -15, 105, 0, -90, 0 } }
+
+当前模板中仍保留原版默认角度；正常由前端生成脚本时，会被第一节的下发值覆盖。
+所以只改 global.lua 默认值不够，第一节的下发位置必须修改。
+同步模板默认值是为了使默认配置与定制配置一致。
+
+三、通常无需修改的位置：运行和到位检查逻辑
+
+文件：PalScript/Template/General/src0.lua
+第 36～42 行：根据 HighLoadFunc 选择普通或高负载姿态，保存到 LiftingPoint。
+AdjustLiftingHeight 函数：使用 MovJ(LiftingPoint, ...) 移动到升降姿态。
+随后用 GetAngle() 检查六轴角度，每 100 ms 检查一次；
+全部误差不超过 0.1°后，才下发升降命令；超过 60 秒仍未到位则报警。
+这里只需引用姿态变量，不必为修改角度而改动函数、到位条件或新增 flag。
+
+注意：缠膜流程也复用了 LiftingPoint，改变这两个姿态值也会影响缠膜流程使用的该点。
+
+四、修改后如何生效
+
+1. 保存 Main/index.html；如需统一模板默认值，同时保存 global.lua。
+2. 重新打包插件内容，ZIP 根目录直接包含 Main、Blocks、PalScript、Resources
+   和入口 Lua 文件，不额外包一层工程文件夹，也不要把旧 ZIP 放进去。
+3. 当前配置为：
+   Main/config.json 的 name = Palletizing
+   Main/config.json 的 version = 2-5-0-stable-SafeLift
+   对应安装包文件名：Palletizing_v2-5-0-stable-SafeLift.zip
+   仅修改姿态无需改名。如另外修改版本号，应同步 index.html 内嵌配置中的版本号。
+4. 在上位机更新插件并重新打开界面，重新生成运行脚本。
+   旧 ZIP 和已经生成的旧运行脚本不会随源码修改自动更新。
+5. 检查新生成的 global.lua 中 LiftingSafetyPoint 与 LiftingSafetyPoint_HL
+   是否为新的六轴角度，并确认当前是否开启高负载模式。
+6. 联机验证新姿态及路径，同时检查“到位后才升降”和暂停恢复行为。
+
+本说明只记录修改方法；未据此再次修改姿态，也未重新打包现有 ZIP。
